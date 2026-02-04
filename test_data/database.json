@@ -1,0 +1,10 @@
+[
+  {"id": "new_1", "name": "Premium Widget", "category": "electronics", "price": 149.99, "rating": 4.8},
+  {"id": "new_2", "name": "Budget Gadget", "category": "tools", "price": 9.99, "rating": 3.9},
+  {"id": "new_3", "name": "Deluxe Item", "category": "household", "price": 79.99, "rating": 4.6},
+  {"id": "new_4", "name": "Pro Tool", "category": "tools", "price": 199.99, "rating": 4.9},
+  {"id": "new_5", "name": "Mini Device", "category": "electronics", "price": 24.99, "rating": 4.1},
+  {"id": "new_6", "name": "Super Gadget", "category": "electronics", "price": 299.99, "rating": 4.7},
+  {"id": "new_7", "name": "Basic Widget", "category": "household", "price": 5.99, "rating": 3.5},
+  {"id": "new_8", "name": "Advanced Tool", "category": "tools", "price": 89.99, "rating": 4.4}
+]

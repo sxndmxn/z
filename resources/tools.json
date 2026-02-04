@@ -1,0 +1,61 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "query_database",
+        "description": "Query available rows that can be added to XML. Returns matching rows from the database.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "filter": {
+              "type": "string",
+              "description": "Optional filter criteria (e.g., 'category=books' or 'price>100')"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Maximum number of rows to return (default: 10)"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "select_rows",
+        "description": "Select specific rows to add to the XML file. Call this when you've decided which rows to add.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "row_ids": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "List of row IDs to select for adding to XML"
+            }
+          },
+          "required": ["row_ids"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_row_details",
+        "description": "Get detailed information about specific rows by their IDs.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "row_ids": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "List of row IDs to get details for"
+            }
+          },
+          "required": ["row_ids"]
+        }
+      }
+    }
+  ]
+}

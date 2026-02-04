@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog>
+  <metadata>
+    <created>2024-01-01</created>
+    <version>1.0</version>
+  </metadata>
+  <items>
+    <item id="existing_1">
+      <name>Existing Product</name>
+      <price>19.99</price>
+    </item>
+  </items>
+</catalog>
