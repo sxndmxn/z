@@ -14,20 +14,26 @@ pub struct XmlModifier {
 
 impl XmlModifier {
     /// Load XML from a file
+    ///
+    /// # Errors
+    /// Returns error if file cannot be read
     pub fn from_file(path: &Path) -> Result<Self> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| ZError::Io(e))?;
+        let content = fs::read_to_string(path)?;
         Ok(XmlModifier { content })
     }
 
     /// Load XML from a string
     #[allow(dead_code)]
+    #[must_use]
     pub fn from_string(content: String) -> Self {
         XmlModifier { content }
     }
 
     /// Insert data rows into the XML at the specified parent element
     /// Creates new child elements for each row
+    ///
+    /// # Errors
+    /// Returns error if XML parsing or modification fails
     pub fn insert_rows(
         &self,
         rows: &[DataRow],
@@ -62,7 +68,7 @@ impl XmlModifier {
 
                     // Insert rows before closing parent element
                     if in_target && depth == target_depth && name == parent_element && !inserted {
-                        self.write_rows(&mut writer, rows, element_name)?;
+                        Self::write_rows(&mut writer, rows, element_name)?;
                         inserted = true;
                         in_target = false;
                     }
@@ -79,7 +85,7 @@ impl XmlModifier {
                         writer.write_event(Event::Start(start))?;
 
                         // Write rows
-                        self.write_rows(&mut writer, rows, element_name)?;
+                        Self::write_rows(&mut writer, rows, element_name)?;
 
                         // Close tag
                         let end = BytesEnd::new(&name);
@@ -99,7 +105,7 @@ impl XmlModifier {
             return Err(ZError::Xml(quick_xml::Error::Io(std::sync::Arc::new(
                 std::io::Error::new(
                     std::io::ErrorKind::NotFound,
-                    format!("Parent element '{}' not found", parent_element),
+                    format!("Parent element '{parent_element}' not found"),
                 ),
             ))));
         }
@@ -113,7 +119,6 @@ impl XmlModifier {
 
     /// Write rows as XML elements
     fn write_rows<W: std::io::Write>(
-        &self,
         writer: &mut Writer<W>,
         rows: &[DataRow],
         element_name: &str,
@@ -158,6 +163,9 @@ impl XmlModifier {
     }
 
     /// Write to a file atomically (write to .tmp, then rename)
+    ///
+    /// # Errors
+    /// Returns error if file operations fail
     pub fn write_to_file(content: &str, path: &Path) -> Result<()> {
         let tmp_path = path.with_extension("xml.tmp");
 
@@ -195,7 +203,7 @@ mod tests {
             fields,
         }];
 
-        let result = modifier.insert_rows(&rows, "items", "item").unwrap();
+        let result = modifier.insert_rows(&rows, "items", "item").expect("insert rows");
 
         assert!(result.contains(r#"<item id="new_1">"#));
         assert!(result.contains("<name>test</name>"));
@@ -216,7 +224,7 @@ mod tests {
             fields: HashMap::new(),
         }];
 
-        let result = modifier.insert_rows(&rows, "items", "item").unwrap();
+        let result = modifier.insert_rows(&rows, "items", "item").expect("insert rows");
 
         assert!(result.contains(r#"<item id="1">"#));
         assert!(result.contains("</items>"));
@@ -224,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_parent_not_found() {
-        let xml = r#"<?xml version="1.0"?><root></root>"#;
+        let xml = r"<?xml version='1.0'?><root></root>";
         let modifier = XmlModifier::from_string(xml.to_string());
 
         let result = modifier.insert_rows(&[], "nonexistent", "item");

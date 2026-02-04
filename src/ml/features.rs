@@ -14,6 +14,9 @@ pub struct FeatureMatrix {
 
 impl FeatureMatrix {
     /// Extract numeric features from CSV data
+    ///
+    /// # Errors
+    /// Returns error if no numeric columns found
     pub fn from_csv(csv: &CsvData) -> Result<Self> {
         let numeric_cols = csv.numeric_column_indices();
 
@@ -66,16 +69,19 @@ impl FeatureMatrix {
 
     /// Get number of samples (rows)
     #[allow(dead_code)]
+    #[must_use]
     pub fn n_samples(&self) -> usize {
         self.data.len()
     }
 
     /// Get number of features (columns)
+    #[must_use]
     pub fn n_features(&self) -> usize {
         self.names.len()
     }
 
     /// Get a feature column by index
+    #[must_use]
     pub fn column(&self, index: usize) -> Option<Vec<f64>> {
         if index >= self.n_features() {
             return None;
@@ -84,6 +90,7 @@ impl FeatureMatrix {
     }
 
     /// Normalize features using min-max scaling to [0, 1]
+    #[must_use]
     pub fn normalize(&self) -> NormalizedFeatures {
         let mut mins = vec![f64::MAX; self.n_features()];
         let mut maxs = vec![f64::MIN; self.n_features()];
@@ -124,8 +131,9 @@ impl FeatureMatrix {
         }
     }
 
-    /// Convert to flat Vec<f64> (row-major)
+    /// Convert to flat `Vec<f64>` (row-major)
     #[allow(dead_code)]
+    #[must_use]
     pub fn to_flat(&self) -> Vec<f64> {
         self.data.iter().flatten().copied().collect()
     }
@@ -145,22 +153,26 @@ pub struct NormalizedFeatures {
 
 impl NormalizedFeatures {
     /// Get number of samples
+    #[must_use]
     pub fn n_samples(&self) -> usize {
         self.data.len()
     }
 
     /// Get number of features
+    #[must_use]
     pub fn n_features(&self) -> usize {
         self.names.len()
     }
 
-    /// Convert to flat Vec<f64> (row-major)
+    /// Convert to flat `Vec<f64>` (row-major)
+    #[must_use]
     pub fn to_flat(&self) -> Vec<f64> {
         self.data.iter().flatten().copied().collect()
     }
 
     /// Denormalize a single value
     #[allow(dead_code)]
+    #[must_use]
     pub fn denormalize(&self, feature_idx: usize, normalized_val: f64) -> f64 {
         let range = self.maxs[feature_idx] - self.mins[feature_idx];
         self.mins[feature_idx] + normalized_val * range
@@ -175,15 +187,15 @@ mod tests {
 
     fn create_test_csv() -> CsvData {
         let content = "name,x,y\na,1.0,10.0\nb,2.0,20.0\nc,3.0,30.0";
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(content.as_bytes()).unwrap();
-        CsvData::from_file(file.path(), false).unwrap()
+        let mut file = NamedTempFile::new().expect("create temp file");
+        file.write_all(content.as_bytes()).expect("write content");
+        CsvData::from_file(file.path(), false).expect("parse csv")
     }
 
     #[test]
     fn test_feature_extraction() {
         let csv = create_test_csv();
-        let features = FeatureMatrix::from_csv(&csv).unwrap();
+        let features = FeatureMatrix::from_csv(&csv).expect("extract features");
 
         assert_eq!(features.n_samples(), 3);
         assert_eq!(features.n_features(), 2);
@@ -193,7 +205,7 @@ mod tests {
     #[test]
     fn test_normalization() {
         let csv = create_test_csv();
-        let features = FeatureMatrix::from_csv(&csv).unwrap();
+        let features = FeatureMatrix::from_csv(&csv).expect("extract features");
         let normalized = features.normalize();
 
         // First value should be 0.0, last should be 1.0

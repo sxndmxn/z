@@ -18,19 +18,22 @@ impl LlamaServer {
     /// Find an available port by binding to port 0
     fn find_available_port() -> Result<u16> {
         let listener = TcpListener::bind("127.0.0.1:0")
-            .map_err(|e| ZError::LlmServer(format!("Failed to find available port: {}", e)))?;
+            .map_err(|e| ZError::LlmServer(format!("Failed to find available port: {e}")))?;
         let port = listener.local_addr()
-            .map_err(|e| ZError::LlmServer(format!("Failed to get port: {}", e)))?
+            .map_err(|e| ZError::LlmServer(format!("Failed to get port: {e}")))?
             .port();
         Ok(port)
     }
 
     /// Spawn llama-server with the given model
+    ///
+    /// # Errors
+    /// Returns error if server fails to start
     pub fn spawn(server_path: &str, model_path: &str, context_size: u32, gpu_layers: u32) -> Result<Self> {
         let port = Self::find_available_port()?;
         let shutdown = Arc::new(AtomicBool::new(false));
 
-        eprintln!("Starting llama-server on port {}...", port);
+        eprintln!("Starting llama-server on port {port}...");
 
         let child = Command::new(server_path)
             .args([
@@ -43,7 +46,7 @@ impl LlamaServer {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| ZError::LlmServer(format!("Failed to spawn llama-server: {}", e)))?;
+            .map_err(|e| ZError::LlmServer(format!("Failed to spawn llama-server: {e}")))?;
 
         let server = LlamaServer {
             child: Some(child),
@@ -54,16 +57,18 @@ impl LlamaServer {
         // Wait for server to be ready
         server.wait_for_health(Duration::from_secs(30))?;
 
-        eprintln!("llama-server ready on port {}", port);
+        eprintln!("llama-server ready on port {port}");
         Ok(server)
     }
 
     /// Get the server URL
+    #[must_use]
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
     }
 
     /// Get the completions endpoint
+    #[must_use]
     pub fn completions_url(&self) -> String {
         format!("{}/v1/chat/completions", self.url())
     }
@@ -77,8 +82,7 @@ impl LlamaServer {
         loop {
             if start.elapsed() > timeout {
                 return Err(ZError::LlmServer(format!(
-                    "Server failed to start within {:?}",
-                    timeout
+                    "Server failed to start within {timeout:?}"
                 )));
             }
 
@@ -95,6 +99,7 @@ impl LlamaServer {
 
     /// Check if server is healthy
     #[allow(dead_code)]
+    #[must_use]
     pub fn is_healthy(&self) -> bool {
         let health_url = format!("{}/health", self.url());
         matches!(
@@ -140,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_find_available_port() {
-        let port = LlamaServer::find_available_port().unwrap();
+        let port = LlamaServer::find_available_port().expect("find port");
         assert!(port > 0);
     }
 }

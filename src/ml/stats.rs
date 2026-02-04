@@ -17,6 +17,10 @@ pub struct ColumnStats {
 
 impl ColumnStats {
     /// Calculate statistics for a vector of values
+    ///
+    /// # Errors
+    /// Returns error if values is empty
+    #[allow(clippy::cast_precision_loss)]
     pub fn calculate(name: &str, values: &[f64]) -> Result<Self> {
         if values.is_empty() {
             return Err(ZError::Ml("Cannot calculate stats for empty data".into()));
@@ -54,6 +58,7 @@ impl ColumnStats {
     }
 
     /// Detect outliers using IQR method (values outside 1.5 * IQR)
+    #[must_use]
     pub fn outlier_indices(&self, values: &[f64]) -> Vec<usize> {
         let lower_bound = self.q1 - 1.5 * self.iqr;
         let upper_bound = self.q3 + 1.5 * self.iqr;
@@ -67,6 +72,7 @@ impl ColumnStats {
     }
 
     /// Format as a summary string
+    #[must_use]
     pub fn summary(&self) -> String {
         format!(
             "{}: n={}, mean={:.2}, std={:.2}, min={:.2}, Q1={:.2}, median={:.2}, Q3={:.2}, max={:.2}, IQR={:.2}",
@@ -76,6 +82,7 @@ impl ColumnStats {
 }
 
 /// Calculate percentile using linear interpolation
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
@@ -98,7 +105,10 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 }
 
 /// Calculate correlation coefficient between two variables
-#[allow(dead_code)]
+///
+/// # Errors
+/// Returns error if vectors have different lengths or fewer than 2 values
+#[allow(dead_code, clippy::cast_precision_loss)]
 pub fn correlation(x: &[f64], y: &[f64]) -> Result<f64> {
     if x.len() != y.len() {
         return Err(ZError::Ml("Vectors must have same length".into()));
@@ -138,7 +148,7 @@ mod tests {
     #[test]
     fn test_column_stats() {
         let values = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let stats = ColumnStats::calculate("test", &values).unwrap();
+        let stats = ColumnStats::calculate("test", &values).expect("calculate stats");
 
         assert_eq!(stats.count, 10);
         assert!((stats.mean - 5.5).abs() < 0.01);
@@ -150,7 +160,7 @@ mod tests {
     #[test]
     fn test_outlier_detection() {
         let values = vec![1.0, 2.0, 3.0, 4.0, 5.0, 100.0]; // 100 is outlier
-        let stats = ColumnStats::calculate("test", &values).unwrap();
+        let stats = ColumnStats::calculate("test", &values).expect("calculate stats");
         let outliers = stats.outlier_indices(&values);
 
         assert!(outliers.contains(&5));
@@ -160,7 +170,7 @@ mod tests {
     fn test_correlation() {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let y = vec![2.0, 4.0, 6.0, 8.0, 10.0];
-        let corr = correlation(&x, &y).unwrap();
+        let corr = correlation(&x, &y).expect("calculate correlation");
 
         assert!((corr - 1.0).abs() < 0.01); // Perfect positive correlation
     }

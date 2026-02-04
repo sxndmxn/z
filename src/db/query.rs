@@ -1,3 +1,5 @@
+#![allow(clippy::module_name_repetitions)]
+
 use crate::error::{Result, ZError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,15 +17,27 @@ pub struct DataRow {
 /// Trait for data sources that can be queried
 pub trait DataSource: Send + Sync {
     /// Query rows with optional filter and limit
+    ///
+    /// # Errors
+    /// Returns error if query fails
     fn query(&self, filter: Option<&str>, limit: usize) -> Result<Vec<DataRow>>;
 
     /// Get a specific row by ID
+    ///
+    /// # Errors
+    /// Returns error if lookup fails
     fn get_row(&self, id: &str) -> Result<Option<DataRow>>;
 
     /// Get all available row IDs
+    ///
+    /// # Errors
+    /// Returns error if retrieval fails
     fn get_all_ids(&self) -> Result<Vec<String>>;
 
     /// Get schema/column information
+    ///
+    /// # Errors
+    /// Returns error if schema retrieval fails
     #[allow(dead_code)]
     fn get_schema(&self) -> Result<Vec<String>>;
 }
@@ -37,17 +51,23 @@ pub struct JsonDataSource {
 
 impl JsonDataSource {
     /// Load from a JSON file
+    ///
+    /// # Errors
+    /// Returns error if file cannot be read or parsed
     pub fn from_file(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
-            .map_err(|e| ZError::Database(format!("Failed to read database file: {}", e)))?;
+            .map_err(|e| ZError::Database(format!("Failed to read database file: {e}")))?;
 
         Self::from_json(&content)
     }
 
     /// Load from JSON string
+    ///
+    /// # Errors
+    /// Returns error if JSON is invalid
     pub fn from_json(json: &str) -> Result<Self> {
         let value: Value = serde_json::from_str(json)
-            .map_err(|e| ZError::Database(format!("Failed to parse JSON: {}", e)))?;
+            .map_err(|e| ZError::Database(format!("Failed to parse JSON: {e}")))?;
 
         let rows_value = if value.is_array() {
             value
@@ -62,7 +82,7 @@ impl JsonDataSource {
         };
 
         let raw_rows: Vec<Value> = serde_json::from_value(rows_value)
-            .map_err(|e| ZError::Database(format!("Failed to parse rows: {}", e)))?;
+            .map_err(|e| ZError::Database(format!("Failed to parse rows: {e}")))?;
 
         let mut rows = Vec::new();
         let mut schema_keys = std::collections::HashSet::new();
@@ -77,7 +97,7 @@ impl JsonDataSource {
                 .get("id")
                 .and_then(|v| v.as_str().map(String::from))
                 .or_else(|| obj.get("id").and_then(|v| v.as_i64().map(|n| n.to_string())))
-                .unwrap_or_else(|| format!("row_{}", idx));
+                .unwrap_or_else(|| format!("row_{idx}"));
 
             // Collect fields
             let mut fields = HashMap::new();
@@ -97,7 +117,8 @@ impl JsonDataSource {
     }
 
     /// Parse a simple filter like "field=value" or "field>value"
-    fn parse_filter(&self, filter: &str) -> Option<Box<dyn Fn(&DataRow) -> bool + '_>> {
+    #[allow(clippy::type_complexity)]
+    fn parse_filter(filter: &str) -> Option<Box<dyn Fn(&DataRow) -> bool>> {
         // Try equals
         if let Some((field, value)) = filter.split_once('=') {
             let field = field.trim().to_string();
@@ -105,12 +126,11 @@ impl JsonDataSource {
             return Some(Box::new(move |row: &DataRow| {
                 row.fields
                     .get(&field)
-                    .map(|v| match v {
+                    .is_some_and(|v| match v {
                         Value::String(s) => s == &value,
                         Value::Number(n) => n.to_string() == value,
                         _ => v.to_string().trim_matches('"') == value,
                     })
-                    .unwrap_or(false)
             }));
         }
 
@@ -121,9 +141,8 @@ impl JsonDataSource {
                 return Some(Box::new(move |row: &DataRow| {
                     row.fields
                         .get(&field)
-                        .and_then(|v| v.as_f64())
-                        .map(|n| n > threshold)
-                        .unwrap_or(false)
+                        .and_then(Value::as_f64)
+                        .is_some_and(|n| n > threshold)
                 }));
             }
         }
@@ -135,9 +154,8 @@ impl JsonDataSource {
                 return Some(Box::new(move |row: &DataRow| {
                     row.fields
                         .get(&field)
-                        .and_then(|v| v.as_f64())
-                        .map(|n| n < threshold)
-                        .unwrap_or(false)
+                        .and_then(Value::as_f64)
+                        .is_some_and(|n| n < threshold)
                 }));
             }
         }
@@ -149,7 +167,7 @@ impl JsonDataSource {
 impl DataSource for JsonDataSource {
     fn query(&self, filter: Option<&str>, limit: usize) -> Result<Vec<DataRow>> {
         let rows: Vec<DataRow> = if let Some(filter_str) = filter {
-            if let Some(predicate) = self.parse_filter(filter_str) {
+            if let Some(predicate) = Self::parse_filter(filter_str) {
                 self.rows
                     .iter()
                     .filter(|row| predicate(row))
@@ -158,7 +176,7 @@ impl DataSource for JsonDataSource {
                     .collect()
             } else {
                 // Invalid filter, return empty
-                eprintln!("Warning: could not parse filter '{}'", filter_str);
+                eprintln!("Warning: could not parse filter '{filter_str}'");
                 self.rows.iter().take(limit).cloned().collect()
             }
         } else {
@@ -193,10 +211,10 @@ mod tests {
             {"id": "3", "name": "gamma", "value": 30}
         ]"#;
 
-        let ds = JsonDataSource::from_json(json).unwrap();
+        let ds = JsonDataSource::from_json(json).expect("parse json");
 
-        assert_eq!(ds.get_all_ids().unwrap().len(), 3);
-        assert!(ds.get_row("2").unwrap().is_some());
+        assert_eq!(ds.get_all_ids().expect("get ids").len(), 3);
+        assert!(ds.get_row("2").expect("get row").is_some());
     }
 
     #[test]
@@ -207,12 +225,12 @@ mod tests {
             {"id": "3", "name": "gamma", "value": 30}
         ]"#;
 
-        let ds = JsonDataSource::from_json(json).unwrap();
+        let ds = JsonDataSource::from_json(json).expect("parse json");
 
-        let results = ds.query(Some("value>15"), 10).unwrap();
+        let results = ds.query(Some("value>15"), 10).expect("query");
         assert_eq!(results.len(), 2);
 
-        let results = ds.query(Some("name=beta"), 10).unwrap();
+        let results = ds.query(Some("name=beta"), 10).expect("query");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "2");
     }
@@ -225,9 +243,9 @@ mod tests {
             {"id": "3", "value": 30}
         ]"#;
 
-        let ds = JsonDataSource::from_json(json).unwrap();
+        let ds = JsonDataSource::from_json(json).expect("parse json");
 
-        let results = ds.query(None, 2).unwrap();
+        let results = ds.query(None, 2).expect("query");
         assert_eq!(results.len(), 2);
     }
 }

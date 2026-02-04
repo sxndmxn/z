@@ -15,7 +15,7 @@ pub enum ZError {
     Xml(#[from] quick_xml::Error),
 
     #[error("HTTP error: {0}")]
-    Http(#[from] ureq::Error),
+    Http(Box<ureq::Error>),
 
     #[error("LLM server error: {0}")]
     LlmServer(String),
@@ -34,6 +34,12 @@ pub enum ZError {
 
     #[error("Configuration error: {0}")]
     Config(String),
+}
+
+impl From<ureq::Error> for ZError {
+    fn from(e: ureq::Error) -> Self {
+        ZError::Http(Box::new(e))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, ZError>;

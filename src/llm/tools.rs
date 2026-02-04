@@ -41,6 +41,7 @@ pub struct ToolResult {
 }
 
 /// Get the tool definitions for the LLM
+#[must_use]
 pub fn get_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
@@ -110,6 +111,7 @@ pub struct ToolHandler<'a> {
 }
 
 impl<'a> ToolHandler<'a> {
+    #[must_use]
     pub fn new(data_source: &'a dyn DataSource) -> Self {
         ToolHandler {
             data_source,
@@ -118,6 +120,9 @@ impl<'a> ToolHandler<'a> {
     }
 
     /// Execute a tool call and return the result
+    ///
+    /// # Errors
+    /// Returns error if tool execution fails
     pub fn execute(&mut self, tool_call: &ToolCall) -> Result<ToolResult> {
         let args: Value = serde_json::from_str(&tool_call.function.arguments)
             .unwrap_or(json!({}));
@@ -126,7 +131,7 @@ impl<'a> ToolHandler<'a> {
             "query_database" => self.handle_query_database(&args)?,
             "select_rows" => self.handle_select_rows(&args)?,
             "get_row_details" => self.handle_get_row_details(&args)?,
-            name => return Err(ZError::ToolCall(format!("Unknown tool: {}", name))),
+            name => return Err(ZError::ToolCall(format!("Unknown tool: {name}"))),
         };
 
         Ok(ToolResult {
@@ -135,11 +140,12 @@ impl<'a> ToolHandler<'a> {
         })
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn handle_query_database(&self, args: &Value) -> Result<String> {
-        let filter = args.get("filter").and_then(|v| v.as_str());
+        let filter = args.get("filter").and_then(Value::as_str);
         let limit = args
             .get("limit")
-            .and_then(|v| v.as_u64())
+            .and_then(Value::as_u64)
             .unwrap_or(10) as usize;
 
         let rows = self.data_source.query(filter, limit)?;
@@ -171,11 +177,11 @@ impl<'a> ToolHandler<'a> {
         // Validate that rows exist
         for id in &row_ids {
             if self.data_source.get_row(id)?.is_none() {
-                return Err(ZError::ToolCall(format!("Row not found: {}", id)));
+                return Err(ZError::ToolCall(format!("Row not found: {id}")));
             }
         }
 
-        self.selected_rows = row_ids.clone();
+        self.selected_rows.clone_from(&row_ids);
 
         Ok(json!({
             "status": "success",
@@ -207,11 +213,13 @@ impl<'a> ToolHandler<'a> {
     }
 
     /// Get the selected rows after the conversation
+    #[must_use]
     pub fn get_selected_rows(&self) -> &[String] {
         &self.selected_rows
     }
 
     /// Check if selection is complete
+    #[must_use]
     pub fn has_selection(&self) -> bool {
         !self.selected_rows.is_empty()
     }

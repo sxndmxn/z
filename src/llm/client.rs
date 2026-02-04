@@ -18,6 +18,7 @@ pub struct Message {
 
 /// Token usage from API response
 #[derive(Debug, Deserialize, Default, Clone, Copy)]
+#[allow(clippy::struct_field_names)]
 pub struct Usage {
     #[serde(default)]
     pub prompt_tokens: u32,
@@ -59,6 +60,7 @@ pub struct LlmClient<'a> {
 }
 
 impl<'a> LlmClient<'a> {
+    #[must_use]
     pub fn new(server: &'a LlamaServer, system_prompt: &str, max_turns: usize) -> Self {
         let messages = vec![Message {
             role: "system".to_string(),
@@ -76,6 +78,7 @@ impl<'a> LlmClient<'a> {
     }
 
     /// Get total token usage
+    #[must_use]
     pub fn total_usage(&self) -> Usage {
         self.total_usage
     }
@@ -91,6 +94,9 @@ impl<'a> LlmClient<'a> {
     }
 
     /// Run the conversation loop with tool calling
+    ///
+    /// # Errors
+    /// Returns error if LLM communication fails
     pub fn run_conversation(&mut self, data_source: &dyn DataSource) -> Result<Vec<String>> {
         let mut handler = ToolHandler::new(data_source);
         let tools = get_tool_definitions();
@@ -134,7 +140,7 @@ impl<'a> LlmClient<'a> {
                 // No tool calls - LLM finished
                 eprintln!("LLM finished without selection");
                 if let Some(content) = &response.content {
-                    eprintln!("Final response: {}", content);
+                    eprintln!("Final response: {content}");
                 }
                 break;
             }
@@ -158,12 +164,11 @@ impl<'a> LlmClient<'a> {
         let response = ureq::post(&self.server.completions_url())
             .set("Content-Type", "application/json")
             .timeout(std::time::Duration::from_secs(120))
-            .send_json(&body)
-            .map_err(|e| ZError::Http(e))?;
+            .send_json(&body)?;
 
         let chat_response: ChatResponse = response
             .into_json()
-            .map_err(|e| ZError::LlmResponse(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| ZError::LlmResponse(format!("Failed to parse response: {e}")))?;
 
         // Accumulate usage
         if let Some(usage) = chat_response.usage {
@@ -182,9 +187,10 @@ impl<'a> LlmClient<'a> {
 }
 
 /// Build the system prompt with ML analysis
+#[must_use]
 pub fn build_system_prompt(ml_summary: &str, csv_summary: &str) -> String {
     format!(
-        r#"You are an AI assistant that analyzes data and selects rows to add to an XML file.
+        r"You are an AI assistant that analyzes data and selects rows to add to an XML file.
 
 ## Your Task
 Based on the ML analysis and CSV data summary below, use the available tools to:
@@ -193,10 +199,10 @@ Based on the ML analysis and CSV data summary below, use the available tools to:
 3. Select the final rows using the select_rows tool
 
 ## ML Analysis Summary
-{}
+{ml_summary}
 
 ## CSV Data Summary
-{}
+{csv_summary}
 
 ## Guidelines
 - Focus on selecting rows that complement the existing data
@@ -205,7 +211,6 @@ Based on the ML analysis and CSV data summary below, use the available tools to:
 - Be concise in your reasoning to save tokens
 - Call select_rows when you've made your final decision
 
-Start by querying the database to see available options."#,
-        ml_summary, csv_summary
+Start by querying the database to see available options."
     )
 }

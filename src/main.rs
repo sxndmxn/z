@@ -1,3 +1,7 @@
+#![allow(clippy::uninlined_format_args)]
+
+use std::fmt::Write as _;
+
 mod csv_reader;
 mod db;
 mod error;
@@ -72,43 +76,44 @@ struct Args {
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("Error: {}", e);
+        eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn run() -> Result<()> {
     let args = Args::parse();
 
     // Validate paths
     if !args.input.exists() {
         return Err(ZError::Config(format!(
-            "Input file not found: {:?}",
-            args.input
+            "Input file not found: {}",
+            args.input.display()
         )));
     }
     if !args.xml.exists() {
         return Err(ZError::Config(format!(
-            "XML file not found: {:?}",
-            args.xml
+            "XML file not found: {}",
+            args.xml.display()
         )));
     }
     if !args.server.exists() {
         return Err(ZError::Config(format!(
-            "Server executable not found: {:?}",
-            args.server
+            "Server executable not found: {}",
+            args.server.display()
         )));
     }
     if !args.model.exists() {
         return Err(ZError::Config(format!(
-            "Model file not found: {:?}",
-            args.model
+            "Model file not found: {}",
+            args.model.display()
         )));
     }
     if !args.database.exists() {
         return Err(ZError::Config(format!(
-            "Database file not found: {:?}",
-            args.database
+            "Database file not found: {}",
+            args.database.display()
         )));
     }
 
@@ -121,13 +126,13 @@ fn run() -> Result<()> {
         eprintln!("\nReceived Ctrl+C, shutting down...");
         shutdown_clone.store(true, Ordering::SeqCst);
     })
-    .map_err(|e| ZError::Config(format!("Failed to set Ctrl+C handler: {}", e)))?;
+    .map_err(|e| ZError::Config(format!("Failed to set Ctrl+C handler: {e}")))?;
 
     // Setup panic hook
     llm::server::setup_panic_hook(shutdown.clone());
 
     // Phase 1: Parse CSV
-    eprintln!("Reading input file: {:?}", args.input);
+    eprintln!("Reading input file: {}", args.input.display());
     let csv_data = csv_reader::CsvData::from_file(&args.input, args.tsv)?;
     eprintln!(
         "Loaded {} rows x {} columns",
@@ -150,7 +155,7 @@ fn run() -> Result<()> {
 
                 let outliers = stats.outlier_indices(&col);
                 if !outliers.is_empty() {
-                    stats_summary.push_str(&format!("  Outliers at indices: {:?}\n", outliers));
+                    let _ = writeln!(stats_summary, "  Outliers at indices: {outliers:?}");
                 }
             }
         }
@@ -162,17 +167,17 @@ fn run() -> Result<()> {
     } else {
         args.clusters
     };
-    eprintln!("Running K-means with k={}...", k);
+    eprintln!("Running K-means with k={k}...");
 
     let cluster_result = ml::clustering::kmeans(&normalized, k)?;
     let cluster_summary = cluster_result.summary();
 
     // Build ML summary
-    let ml_summary = format!("{}\n{}", stats_summary, cluster_summary);
+    let ml_summary = format!("{stats_summary}\n{cluster_summary}");
     let csv_summary = csv_data.summary();
 
     // Phase 3: Load database
-    eprintln!("Loading database: {:?}", args.database);
+    eprintln!("Loading database: {}", args.database.display());
     let data_source = db::JsonDataSource::from_file(&args.database)?;
     let available_ids = data_source.get_all_ids()?;
     eprintln!("Database contains {} rows", available_ids.len());
@@ -185,9 +190,14 @@ fn run() -> Result<()> {
 
     // Phase 4: Start LLM server
     eprintln!("Starting LLM server...");
+    let server_path = args.server.to_str()
+        .ok_or_else(|| ZError::Config("Server path contains invalid UTF-8".into()))?;
+    let model_path = args.model.to_str()
+        .ok_or_else(|| ZError::Config("Model path contains invalid UTF-8".into()))?;
+
     let server = llm::LlamaServer::spawn(
-        args.server.to_str().unwrap(),
-        args.model.to_str().unwrap(),
+        server_path,
+        model_path,
         args.context_size,
         args.gpu_layers,
     )?;
@@ -221,16 +231,16 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    eprintln!("Selected {} rows: {:?}", selected_rows.len(), selected_rows);
+    eprintln!("Selected {} rows: {selected_rows:?}", selected_rows.len());
 
     // Phase 6: Modify XML
     if args.dry_run {
         eprintln!("Dry run - not modifying XML");
-        println!("Would insert rows: {:?}", selected_rows);
+        println!("Would insert rows: {selected_rows:?}");
         return Ok(());
     }
 
-    eprintln!("Loading XML file: {:?}", args.xml);
+    eprintln!("Loading XML file: {}", args.xml.display());
     let xml_modifier = xml::XmlModifier::from_file(&args.xml)?;
 
     // Get full row data for selected IDs
@@ -246,7 +256,7 @@ fn run() -> Result<()> {
         xml_modifier.insert_rows(&rows_to_insert, &args.parent_element, &args.element_name)?;
 
     xml::XmlModifier::write_to_file(&modified_xml, &args.xml)?;
-    eprintln!("XML file updated: {:?}", args.xml);
+    eprintln!("XML file updated: {}", args.xml.display());
 
     Ok(())
 }
