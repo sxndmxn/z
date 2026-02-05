@@ -1,3 +1,4 @@
-pub mod query;
+// This module is currently unused but kept for potential future use
+#![allow(dead_code)]
 
-pub use query::*;
+pub mod query;

@@ -1,7 +1,6 @@
 #![allow(clippy::uninlined_format_args)]
 
-use std::fmt::Write as _;
-
+mod context;
 mod csv_reader;
 mod db;
 mod error;
@@ -9,10 +8,9 @@ mod llm;
 mod ml;
 mod xml;
 
-use clap::Parser;
-use db::DataSource;
+use clap::{Parser, Subcommand};
 use error::{Result, ZError};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -21,57 +19,65 @@ use std::sync::Arc;
 #[command(name = "z")]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Input CSV/TSV file to analyze
-    #[arg(short, long)]
-    input: PathBuf,
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
 
-    /// XML file to modify
-    #[arg(short = 'x', long)]
-    xml: PathBuf,
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Run ML analysis on CSV, output summary files
+    Analyze {
+        /// Input CSV/TSV file to analyze
+        #[arg(short, long)]
+        csv: PathBuf,
 
-    /// Path to llama-server executable
-    #[arg(short, long)]
-    server: PathBuf,
+        /// Output directory for ML results
+        #[arg(short, long, default_value = "./ml_output")]
+        output_dir: PathBuf,
 
-    /// Path to GGUF model file
-    #[arg(short, long)]
-    model: PathBuf,
+        /// Number of clusters for K-means (0 = auto)
+        #[arg(short = 'k', long, default_value = "0")]
+        clusters: usize,
 
-    /// Path to database file (JSON)
-    #[arg(short, long)]
-    database: PathBuf,
+        /// Treat input as TSV instead of CSV
+        #[arg(long)]
+        tsv: bool,
+    },
 
-    /// Number of clusters for K-means (0 = auto)
-    #[arg(short = 'k', long, default_value = "0")]
-    clusters: usize,
+    /// Use LLM to modify XML based on context files
+    Modify {
+        /// Directory containing context files (ML outputs, instructions)
+        #[arg(short, long)]
+        context_dir: PathBuf,
 
-    /// Treat input as TSV instead of CSV
-    #[arg(long)]
-    tsv: bool,
+        /// XML file to modify
+        #[arg(short = 'x', long)]
+        xml: PathBuf,
 
-    /// Parent element in XML to insert rows into
-    #[arg(long, default_value = "items")]
-    parent_element: String,
+        /// Path to llama-server executable
+        #[arg(short, long)]
+        server: PathBuf,
 
-    /// Element name for inserted rows
-    #[arg(long, default_value = "item")]
-    element_name: String,
+        /// Path to GGUF model file
+        #[arg(short, long)]
+        model: PathBuf,
 
-    /// Context size for LLM (tokens)
-    #[arg(long, default_value = "12000")]
-    context_size: u32,
+        /// Context size for LLM (tokens)
+        #[arg(long, default_value = "12000")]
+        context_size: u32,
 
-    /// GPU layers to offload
-    #[arg(long, default_value = "99")]
-    gpu_layers: u32,
+        /// GPU layers to offload
+        #[arg(long, default_value = "99")]
+        gpu_layers: u32,
 
-    /// Maximum conversation turns
-    #[arg(long, default_value = "10")]
-    max_turns: usize,
+        /// Maximum conversation turns
+        #[arg(long, default_value = "10")]
+        max_turns: usize,
 
-    /// Dry run - don't modify XML, just show what would be selected
-    #[arg(long)]
-    dry_run: bool,
+        /// Dry run - don't modify XML, just show what would be done
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() {
@@ -81,182 +87,308 @@ fn main() {
     }
 }
 
-#[allow(clippy::too_many_lines)]
 fn run() -> Result<()> {
     let args = Args::parse();
 
-    // Validate paths
-    if !args.input.exists() {
-        return Err(ZError::Config(format!(
-            "Input file not found: {}",
-            args.input.display()
-        )));
+    match args.command {
+        Some(Commands::Analyze {
+            csv,
+            output_dir,
+            clusters,
+            tsv,
+        }) => run_analyze(&csv, &output_dir, clusters, tsv),
+
+        Some(Commands::Modify {
+            context_dir,
+            xml,
+            server,
+            model,
+            context_size,
+            gpu_layers,
+            max_turns,
+            dry_run,
+        }) => run_modify(
+            &context_dir,
+            &xml,
+            &server,
+            &model,
+            context_size,
+            gpu_layers,
+            max_turns,
+            dry_run,
+        ),
+
+        None => {
+            eprintln!("No subcommand provided. Use 'z analyze' or 'z modify'.");
+            eprintln!("Run 'z --help' for usage information.");
+            std::process::exit(1);
+        }
     }
-    if !args.xml.exists() {
+}
+
+/// Run the ML analysis phase
+#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
+fn run_analyze(csv_path: &Path, output_dir: &Path, clusters: usize, tsv: bool) -> Result<()> {
+    use std::fmt::Write as _;
+
+    // Validate input
+    if !csv_path.exists() {
         return Err(ZError::Config(format!(
-            "XML file not found: {}",
-            args.xml.display()
-        )));
-    }
-    if !args.server.exists() {
-        return Err(ZError::Config(format!(
-            "Server executable not found: {}",
-            args.server.display()
-        )));
-    }
-    if !args.model.exists() {
-        return Err(ZError::Config(format!(
-            "Model file not found: {}",
-            args.model.display()
-        )));
-    }
-    if !args.database.exists() {
-        return Err(ZError::Config(format!(
-            "Database file not found: {}",
-            args.database.display()
+            "CSV file not found: {}",
+            csv_path.display()
         )));
     }
 
-    // Setup shutdown flag for cleanup
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let shutdown_clone = shutdown.clone();
+    // Create output directory
+    std::fs::create_dir_all(output_dir)?;
 
-    // Setup Ctrl+C handler
-    ctrlc::set_handler(move || {
-        eprintln!("\nReceived Ctrl+C, shutting down...");
-        shutdown_clone.store(true, Ordering::SeqCst);
-    })
-    .map_err(|e| ZError::Config(format!("Failed to set Ctrl+C handler: {e}")))?;
+    eprintln!("Analyzing: {}", csv_path.display());
 
-    // Setup panic hook
-    llm::server::setup_panic_hook(shutdown.clone());
-
-    // Phase 1: Parse CSV
-    eprintln!("Reading input file: {}", args.input.display());
-    let csv_data = csv_reader::CsvData::from_file(&args.input, args.tsv)?;
+    // Parse CSV
+    let csv_data = csv_reader::CsvData::from_file(csv_path, tsv)?;
     eprintln!(
         "Loaded {} rows x {} columns",
         csv_data.row_count(),
         csv_data.col_count()
     );
 
-    // Phase 2: ML Analysis
+    // Extract features
     eprintln!("Extracting features...");
     let features = ml::features::FeatureMatrix::from_csv(&csv_data)?;
     let normalized = features.normalize();
 
+    // Compute statistics
     eprintln!("Computing statistics...");
-    let mut stats_summary = String::new();
+    let mut column_stats = Vec::new();
     for (i, name) in features.names.iter().enumerate() {
         if let Some(col) = features.column(i) {
             if let Ok(stats) = ml::stats::ColumnStats::calculate(name, &col) {
-                stats_summary.push_str(&stats.summary());
-                stats_summary.push('\n');
-
-                let outliers = stats.outlier_indices(&col);
-                if !outliers.is_empty() {
-                    let _ = writeln!(stats_summary, "  Outliers at indices: {outliers:?}");
-                }
+                column_stats.push((stats, col));
             }
         }
     }
 
     // Clustering
-    let k = if args.clusters == 0 {
+    let k = if clusters == 0 {
         ml::clustering::suggest_k(&normalized, 10)
     } else {
-        args.clusters
+        clusters
     };
     eprintln!("Running K-means with k={k}...");
-
     let cluster_result = ml::clustering::kmeans(&normalized, k)?;
-    let cluster_summary = cluster_result.summary();
 
-    // Build ML summary
-    let ml_summary = format!("{stats_summary}\n{cluster_summary}");
-    let csv_summary = csv_data.summary();
+    // Detect anomalies
+    eprintln!("Detecting anomalies...");
+    let mut anomalies = Vec::new();
+    for (stats, col) in &column_stats {
+        let outlier_indices = stats.outlier_indices(col);
+        for idx in outlier_indices {
+            let value = col.get(idx).copied().unwrap_or(0.0);
+            let z_score = if stats.std_dev > 0.0 {
+                (value - stats.mean) / stats.std_dev
+            } else {
+                0.0
+            };
+            anomalies.push(ml::output::Anomaly {
+                row_id: idx,
+                anomaly_type: format!("{}_outlier", stats.name),
+                score: z_score.abs() / 4.0, // Normalize to ~0-1 range
+                details: format!(
+                    "{}={:.2} is {:.1} std from mean",
+                    stats.name, value, z_score
+                ),
+            });
+        }
+    }
 
-    // Phase 3: Load database
-    eprintln!("Loading database: {}", args.database.display());
-    let data_source = db::JsonDataSource::from_file(&args.database)?;
-    let available_ids = data_source.get_all_ids()?;
-    eprintln!("Database contains {} rows", available_ids.len());
+    // Sort anomalies by score (highest first) and dedupe by row_id
+    anomalies.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut seen_rows = std::collections::HashSet::new();
+    anomalies.retain(|a| seen_rows.insert(a.row_id));
 
-    // Check for shutdown before expensive LLM startup
+    // Write output files
+    eprintln!("Writing output files...");
+
+    // Build summary
+    let mut summary = String::new();
+    let _ = writeln!(
+        summary,
+        "ML Analysis Summary for {}",
+        csv_path
+            .file_name()
+            .map_or("input", |n| n.to_str().unwrap_or("input"))
+    );
+    let _ = writeln!(summary, "================================");
+    let _ = writeln!(
+        summary,
+        "Rows: {}\nColumns: {} ({} numeric)",
+        csv_data.row_count(),
+        csv_data.col_count(),
+        features.names.len()
+    );
+    let _ = writeln!(summary);
+    let _ = writeln!(summary, "Key Statistics:");
+    for (stats, _) in &column_stats {
+        let _ = writeln!(summary, "- {}", stats.summary());
+    }
+    let _ = writeln!(summary);
+    let _ = writeln!(summary, "Clustering (k={}):", cluster_result.k);
+    for (i, size) in cluster_result.sizes.iter().enumerate() {
+        let pct = (*size as f64 / csv_data.row_count() as f64) * 100.0;
+        let _ = writeln!(summary, "- Cluster {i} ({pct:.0}%): {size} samples");
+    }
+    let _ = writeln!(summary);
+    let _ = writeln!(summary, "Anomalies Detected: {} rows", anomalies.len());
+
+    ml::output::write_summary(output_dir, &summary)?;
+
+    // Write clusters.csv
+    ml::output::write_clusters(output_dir, &cluster_result, &normalized)?;
+
+    // Write anomalies.csv
+    ml::output::write_anomalies(output_dir, &anomalies)?;
+
+    // Write stats.json
+    let stats_only: Vec<_> = column_stats.iter().map(|(s, _)| s).collect();
+    ml::output::write_stats_json(
+        output_dir,
+        &csv_data,
+        &stats_only,
+        &cluster_result,
+        &anomalies,
+    )?;
+
+    eprintln!("Output written to {}", output_dir.display());
+    eprintln!("  - summary.txt");
+    eprintln!("  - clusters.csv");
+    eprintln!("  - anomalies.csv");
+    eprintln!("  - stats.json");
+
+    Ok(())
+}
+
+/// Run the LLM modification phase
+#[allow(clippy::too_many_arguments)]
+fn run_modify(
+    context_dir: &Path,
+    xml_path: &Path,
+    server_path: &Path,
+    model_path: &Path,
+    context_size: u32,
+    gpu_layers: u32,
+    max_turns: usize,
+    dry_run: bool,
+) -> Result<()> {
+    // Validate paths
+    if !context_dir.exists() {
+        return Err(ZError::Config(format!(
+            "Context directory not found: {}",
+            context_dir.display()
+        )));
+    }
+    if !xml_path.exists() {
+        return Err(ZError::Config(format!(
+            "XML file not found: {}",
+            xml_path.display()
+        )));
+    }
+    if !server_path.exists() {
+        return Err(ZError::Config(format!(
+            "Server executable not found: {}",
+            server_path.display()
+        )));
+    }
+    if !model_path.exists() {
+        return Err(ZError::Config(format!(
+            "Model file not found: {}",
+            model_path.display()
+        )));
+    }
+
+    // Setup shutdown flag
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_clone = shutdown.clone();
+
+    ctrlc::set_handler(move || {
+        eprintln!("\nReceived Ctrl+C, shutting down...");
+        shutdown_clone.store(true, Ordering::SeqCst);
+    })
+    .map_err(|e| ZError::Config(format!("Failed to set Ctrl+C handler: {e}")))?;
+
+    llm::server::setup_panic_hook(shutdown.clone());
+
+    // Load context
+    eprintln!("Loading context from: {}", context_dir.display());
+    let context_manager = context::ContextManager::from_directory(context_dir)?;
+    eprintln!("Found {} context files", context_manager.file_count());
+
+    // Load XML
+    eprintln!("Loading XML: {}", xml_path.display());
+    let xml_modifier = xml::XmlModifier::from_file(xml_path)?;
+
+    // Check for shutdown before LLM startup
     if shutdown.load(Ordering::SeqCst) {
         eprintln!("Shutdown requested, exiting early");
         return Ok(());
     }
 
-    // Phase 4: Start LLM server
+    // Start LLM server
     eprintln!("Starting LLM server...");
-    let server_path = args.server.to_str()
+    let server_str = server_path
+        .to_str()
         .ok_or_else(|| ZError::Config("Server path contains invalid UTF-8".into()))?;
-    let model_path = args.model.to_str()
+    let model_str = model_path
+        .to_str()
         .ok_or_else(|| ZError::Config("Model path contains invalid UTF-8".into()))?;
 
-    let server = llm::LlamaServer::spawn(
-        server_path,
-        model_path,
-        args.context_size,
-        args.gpu_layers,
-    )?;
+    let server = llm::LlamaServer::spawn(server_str, model_str, context_size, gpu_layers)?;
 
-    // Check for shutdown after server start
     if shutdown.load(Ordering::SeqCst) {
         eprintln!("Shutdown requested, stopping server");
         return Ok(());
     }
 
-    // Phase 5: Run LLM conversation
-    let system_prompt = llm::build_system_prompt(&ml_summary, &csv_summary);
-    let mut client = llm::LlmClient::new(&server, &system_prompt, args.max_turns);
+    // Build system prompt
+    let system_prompt = llm::build_modify_system_prompt(&context_manager);
 
-    // Initial prompt to start the conversation
+    // Run conversation
+    let mut client = llm::LlmClient::new(&server, &system_prompt, max_turns);
     client.add_user_message(
-        "Please analyze the data and select appropriate rows to add to the XML file.",
+        "Please read the context files to understand the ML analysis, then modify the XML file accordingly.",
     );
 
-    let selected_rows = client.run_conversation(&data_source)?;
+    let modifications = client.run_modify_conversation(&context_manager, &xml_modifier)?;
 
-    // Report token usage
+    // Report usage
     let usage = client.total_usage();
     eprintln!(
         "Token usage: {} prompt + {} completion = {} total",
         usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
     );
 
-    if selected_rows.is_empty() {
-        eprintln!("No rows were selected by the LLM");
+    if modifications.is_empty() {
+        eprintln!("No modifications were made");
         return Ok(());
     }
 
-    eprintln!("Selected {} rows: {selected_rows:?}", selected_rows.len());
+    eprintln!("Applied {} modifications", modifications.len());
 
-    // Phase 6: Modify XML
-    if args.dry_run {
-        eprintln!("Dry run - not modifying XML");
-        println!("Would insert rows: {selected_rows:?}");
-        return Ok(());
-    }
-
-    eprintln!("Loading XML file: {}", args.xml.display());
-    let xml_modifier = xml::XmlModifier::from_file(&args.xml)?;
-
-    // Get full row data for selected IDs
-    let mut rows_to_insert = Vec::new();
-    for id in &selected_rows {
-        if let Some(row) = data_source.get_row(id)? {
-            rows_to_insert.push(row);
+    if dry_run {
+        eprintln!("Dry run - not saving XML");
+        for (i, m) in modifications.iter().enumerate() {
+            eprintln!("  {}: {m}", i + 1);
         }
+        return Ok(());
     }
 
-    eprintln!("Inserting {} rows into XML...", rows_to_insert.len());
-    let modified_xml =
-        xml_modifier.insert_rows(&rows_to_insert, &args.parent_element, &args.element_name)?;
-
-    xml::XmlModifier::write_to_file(&modified_xml, &args.xml)?;
-    eprintln!("XML file updated: {}", args.xml.display());
+    // Get modified XML and write
+    let modified_xml = xml_modifier.get_content();
+    xml::XmlModifier::write_to_file(&modified_xml, xml_path)?;
+    eprintln!("XML updated: {}", xml_path.display());
 
     Ok(())
 }

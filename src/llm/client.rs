@@ -1,7 +1,8 @@
-use crate::db::DataSource;
+use crate::context::ContextManager;
 use crate::error::{Result, ZError};
 use crate::llm::server::LlamaServer;
-use crate::llm::tools::{get_tool_definitions, ToolCall, ToolHandler};
+use crate::llm::tools::{get_modify_tool_definitions, ModifyToolHandler, ToolCall};
+use crate::xml::XmlModifier;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -93,13 +94,17 @@ impl<'a> LlmClient<'a> {
         });
     }
 
-    /// Run the conversation loop with tool calling
+    /// Run the modify conversation loop with tool calling
     ///
     /// # Errors
     /// Returns error if LLM communication fails
-    pub fn run_conversation(&mut self, data_source: &dyn DataSource) -> Result<Vec<String>> {
-        let mut handler = ToolHandler::new(data_source);
-        let tools = get_tool_definitions();
+    pub fn run_modify_conversation(
+        &mut self,
+        context: &ContextManager,
+        xml: &XmlModifier,
+    ) -> Result<Vec<String>> {
+        let mut handler = ModifyToolHandler::new(context, xml);
+        let tools = get_modify_tool_definitions();
 
         for turn in 0..self.max_turns {
             eprintln!("LLM turn {}/{}...", turn + 1, self.max_turns);
@@ -119,7 +124,7 @@ impl<'a> LlmClient<'a> {
 
                 // Execute each tool call
                 for tool_call in tool_calls {
-                    eprintln!("  Tool call: {}", tool_call.function.name);
+                    eprintln!("  Tool: {}()", tool_call.function.name);
                     let result = handler.execute(tool_call)?;
 
                     // Add tool result message
@@ -131,14 +136,14 @@ impl<'a> LlmClient<'a> {
                     });
                 }
 
-                // Check if selection is complete
-                if handler.has_selection() {
-                    eprintln!("Selection complete");
-                    return Ok(handler.get_selected_rows().to_vec());
+                // Check if finished
+                if handler.is_finished() {
+                    eprintln!("LLM signaled completion");
+                    return Ok(handler.get_modifications().to_vec());
                 }
             } else {
-                // No tool calls - LLM finished
-                eprintln!("LLM finished without selection");
+                // No tool calls - LLM finished without using finish tool
+                eprintln!("LLM finished (no more tool calls)");
                 if let Some(content) = &response.content {
                     eprintln!("Final response: {content}");
                 }
@@ -146,12 +151,15 @@ impl<'a> LlmClient<'a> {
             }
         }
 
-        // Return whatever was selected (may be empty)
-        Ok(handler.get_selected_rows().to_vec())
+        // Return whatever modifications were made
+        Ok(handler.get_modifications().to_vec())
     }
 
     /// Send a request to the LLM
-    fn send_request(&mut self, tools: &[crate::llm::tools::ToolDefinition]) -> Result<ResponseMessage> {
+    fn send_request(
+        &mut self,
+        tools: &[crate::llm::tools::ToolDefinition],
+    ) -> Result<ResponseMessage> {
         let body = json!({
             "model": "default",
             "messages": self.messages,
@@ -186,31 +194,33 @@ impl<'a> LlmClient<'a> {
     }
 }
 
-/// Build the system prompt with ML analysis
+/// Build a minimal system prompt for the modify phase (~400 tokens)
 #[must_use]
-pub fn build_system_prompt(ml_summary: &str, csv_summary: &str) -> String {
+pub fn build_modify_system_prompt(context: &ContextManager) -> String {
+    let file_index = context.build_file_index_summary();
+
     format!(
-        r"You are an AI assistant that analyzes data and selects rows to add to an XML file.
+        r"You are an AI that modifies XML files based on ML analysis results.
 
+## Available Context Files
+{file_index}
 ## Your Task
-Based on the ML analysis and CSV data summary below, use the available tools to:
-1. Query the database to see what rows are available
-2. Analyze which rows would be most valuable to add based on the patterns found
-3. Select the final rows using the select_rows tool
+1. Read context files to understand the ML analysis
+2. Explore the XML structure
+3. Decide what modifications to make based on analysis + any instructions
+4. Execute modifications using modify_xml tool
+5. Call finish when done
 
-## ML Analysis Summary
-{ml_summary}
+## Tools
+- list_files: See available context files
+- read_file: Read a file's content
+- query_csv: Filter/search CSV rows
+- get_xml_structure: See XML hierarchy
+- query_xml: Find elements by pattern
+- get_element: Get specific element
+- modify_xml: Insert/update/delete elements
+- finish: Signal completion
 
-## CSV Data Summary
-{csv_summary}
-
-## Guidelines
-- Focus on selecting rows that complement the existing data
-- Consider outliers and cluster membership when making decisions
-- Prefer rows that fill gaps in the current data distribution
-- Be concise in your reasoning to save tokens
-- Call select_rows when you've made your final decision
-
-Start by querying the database to see available options."
+Start by reading summary.txt to understand the analysis."
     )
 }

@@ -109,12 +109,14 @@ impl CsvData {
     }
 
     /// Get a row by index
+    #[allow(dead_code)]
     #[must_use]
     pub fn row(&self, index: usize) -> Option<&Vec<String>> {
         self.rows.get(index)
     }
 
     /// Convert to a summary string for LLM context
+    #[allow(dead_code)]
     #[must_use]
     pub fn summary(&self) -> String {
         let mut summary = format!(

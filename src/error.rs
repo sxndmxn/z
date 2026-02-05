@@ -26,6 +26,7 @@ pub enum ZError {
     #[error("Tool call error: {0}")]
     ToolCall(String),
 
+    #[allow(dead_code)]
     #[error("Database error: {0}")]
     Database(String),
 

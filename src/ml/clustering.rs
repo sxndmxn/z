@@ -22,6 +22,7 @@ pub struct ClusterResult {
 
 impl ClusterResult {
     /// Get summary for LLM context
+    #[allow(dead_code)]
     #[must_use]
     pub fn summary(&self) -> String {
         let mut s = format!("K-means clustering with k={}\n", self.k);
