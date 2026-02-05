@@ -6,10 +6,11 @@ mod db;
 mod error;
 mod llm;
 mod ml;
+mod structs;
 mod xml;
 
 use clap::{Parser, Subcommand};
-use error::{Result, ZError};
+use structs::{Anomaly, ColumnStats, CsvData, FeatureMatrix, Result, ZError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -145,7 +146,7 @@ fn run_analyze(csv_path: &Path, output_dir: &Path, clusters: usize, tsv: bool) -
     eprintln!("Analyzing: {}", csv_path.display());
 
     // Parse CSV
-    let csv_data = csv_reader::CsvData::from_file(csv_path, tsv)?;
+    let csv_data = CsvData::from_file(csv_path, tsv)?;
     eprintln!(
         "Loaded {} rows x {} columns",
         csv_data.row_count(),
@@ -154,7 +155,7 @@ fn run_analyze(csv_path: &Path, output_dir: &Path, clusters: usize, tsv: bool) -
 
     // Extract features
     eprintln!("Extracting features...");
-    let features = ml::features::FeatureMatrix::from_csv(&csv_data)?;
+    let features = FeatureMatrix::from_csv(&csv_data)?;
     let normalized = features.normalize();
 
     // Compute statistics
@@ -162,7 +163,7 @@ fn run_analyze(csv_path: &Path, output_dir: &Path, clusters: usize, tsv: bool) -
     let mut column_stats = Vec::new();
     for (i, name) in features.names.iter().enumerate() {
         if let Some(col) = features.column(i) {
-            if let Ok(stats) = ml::stats::ColumnStats::calculate(name, &col) {
+            if let Ok(stats) = ColumnStats::calculate(name, &col) {
                 column_stats.push((stats, col));
             }
         }
@@ -189,7 +190,7 @@ fn run_analyze(csv_path: &Path, output_dir: &Path, clusters: usize, tsv: bool) -
             } else {
                 0.0
             };
-            anomalies.push(ml::output::Anomaly {
+            anomalies.push(Anomaly {
                 row_id: idx,
                 anomaly_type: format!("{}_outlier", stats.name),
                 score: z_score.abs() / 4.0, // Normalize to ~0-1 range

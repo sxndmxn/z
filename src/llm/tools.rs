@@ -1,47 +1,11 @@
 //! LLM tool definitions and handlers for the modify phase
 
 use crate::context::ContextManager;
-use crate::error::{Result, ZError};
+use crate::structs::{
+    FunctionDefinition, Result, ToolCall, ToolDefinition, ToolResult, ZError,
+};
 use crate::xml::XmlModifier;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-
-/// Tool definition for LLM
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    #[serde(rename = "type")]
-    pub tool_type: String,
-    pub function: FunctionDefinition,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-}
-
-/// A tool call from the LLM
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub call_type: String,
-    pub function: FunctionCall,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionCall {
-    pub name: String,
-    pub arguments: String,
-}
-
-/// Result of a tool execution
-#[derive(Debug, Clone)]
-pub struct ToolResult {
-    pub tool_call_id: String,
-    pub content: String,
-}
 
 /// Get the tool definitions for the modify phase
 #[must_use]

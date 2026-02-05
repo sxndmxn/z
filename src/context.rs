@@ -1,6 +1,6 @@
 //! Context manager for lazy loading of ML output and instruction files
 
-use crate::error::{Result, ZError};
+use crate::structs::{FileInfo, FileType, Result, ZError};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
@@ -10,86 +10,34 @@ use std::path::{Path, PathBuf};
 pub const MAX_FILE_CONTENT: usize = 2000;
 pub const MAX_CSV_ROWS: usize = 20;
 
-/// File types we recognize
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileType {
-    Text,
-    Csv,
-    Json,
-    Markdown,
-}
+/// Create file info from a path
+fn file_info_from_path(path: &Path) -> Result<FileInfo> {
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| ZError::Config("Invalid filename".into()))?
+        .to_string();
 
-impl FileType {
-    fn from_extension(ext: &str) -> Self {
-        match ext.to_lowercase().as_str() {
-            "csv" | "tsv" => Self::Csv,
-            "json" => Self::Json,
-            "md" | "markdown" => Self::Markdown,
-            _ => Self::Text,
-        }
-    }
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt");
 
-    fn display_name(self) -> &'static str {
-        match self {
-            Self::Text => "text",
-            Self::Csv => "csv",
-            Self::Json => "json",
-            Self::Markdown => "markdown",
-        }
-    }
-}
+    let file_type = FileType::from_extension(extension);
 
-/// Information about a context file
-#[derive(Debug, Clone)]
-pub struct FileInfo {
-    pub filename: String,
-    pub file_type: FileType,
-    pub size_bytes: u64,
-    pub preview: String,
-}
+    let metadata = fs::metadata(path)?;
+    let size_bytes = metadata.len();
 
-impl FileInfo {
-    /// Create file info from a path
-    fn from_path(path: &Path) -> Result<Self> {
-        let filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| ZError::Config("Invalid filename".into()))?
-            .to_string();
+    // Read first 100 chars for preview
+    let content = fs::read_to_string(path)?;
+    let preview = truncate_string(&content, 100);
 
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("txt");
-
-        let file_type = FileType::from_extension(extension);
-
-        let metadata = fs::metadata(path)?;
-        let size_bytes = metadata.len();
-
-        // Read first 100 chars for preview
-        let content = fs::read_to_string(path)?;
-        let preview = truncate_string(&content, 100);
-
-        Ok(FileInfo {
-            filename,
-            file_type,
-            size_bytes,
-            preview,
-        })
-    }
-
-    /// Format for display
-    #[must_use]
-    pub fn display(&self) -> String {
-        format!(
-            "{} ({}, {} bytes): {}...",
-            self.filename,
-            self.file_type.display_name(),
-            self.size_bytes,
-            self.preview.replace('\n', " ")
-        )
-    }
+    Ok(FileInfo {
+        filename,
+        file_type,
+        size_bytes,
+        preview,
+    })
 }
 
 /// Manager for context files with lazy loading
@@ -131,7 +79,7 @@ impl ContextManager {
                 continue;
             }
 
-            match FileInfo::from_path(&path) {
+            match file_info_from_path(&path) {
                 Ok(info) => file_index.push(info),
                 Err(e) => eprintln!("Warning: Could not index {}: {e}", path.display()),
             }

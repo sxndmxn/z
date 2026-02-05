@@ -1,35 +1,12 @@
 use crate::context::ContextManager;
-use crate::error::{Result, ZError};
 use crate::llm::server::LlamaServer;
-use crate::llm::tools::{get_modify_tool_definitions, ModifyToolHandler, ToolCall};
+use crate::llm::tools::{get_modify_tool_definitions, ModifyToolHandler};
+use crate::structs::{Message, Result, ToolCall, ToolDefinition, Usage, ZError};
 use crate::xml::XmlModifier;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 
-/// Message in the conversation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message {
-    pub role: String,
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-}
-
-/// Token usage from API response
-#[derive(Debug, Deserialize, Default, Clone, Copy)]
-#[allow(clippy::struct_field_names)]
-pub struct Usage {
-    #[serde(default)]
-    pub prompt_tokens: u32,
-    #[serde(default)]
-    pub completion_tokens: u32,
-    #[serde(default)]
-    pub total_tokens: u32,
-}
-
-/// Response from the LLM
+/// Response from the LLM (private)
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
@@ -156,10 +133,7 @@ impl<'a> LlmClient<'a> {
     }
 
     /// Send a request to the LLM
-    fn send_request(
-        &mut self,
-        tools: &[crate::llm::tools::ToolDefinition],
-    ) -> Result<ResponseMessage> {
+    fn send_request(&mut self, tools: &[ToolDefinition]) -> Result<ResponseMessage> {
         let body = json!({
             "model": "default",
             "messages": self.messages,

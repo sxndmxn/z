@@ -1,23 +1,9 @@
 //! ML output file writers for the analyze phase
 
-use crate::csv_reader::CsvData;
-use crate::error::Result;
-use crate::ml::clustering::ClusterResult;
-use crate::ml::features::NormalizedFeatures;
-use crate::ml::stats::ColumnStats;
+use crate::structs::{Anomaly, ClusterResult, ColumnStats, CsvData, NormalizedFeatures, Result};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
-
-/// Represents an anomaly detected in the data
-#[derive(Debug, Clone, Serialize)]
-#[allow(clippy::struct_field_names)]
-pub struct Anomaly {
-    pub row_id: usize,
-    pub anomaly_type: String,
-    pub score: f64,
-    pub details: String,
-}
 
 /// Write `summary.txt` - human/LLM readable overview
 ///
@@ -187,7 +173,7 @@ fn count_by_type(anomalies: &[Anomaly]) -> Vec<AnomalyTypeCount> {
         .collect()
 }
 
-// JSON output structures
+// JSON output structures (private)
 
 #[derive(Serialize)]
 struct StatsOutput {

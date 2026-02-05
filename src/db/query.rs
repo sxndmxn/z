@@ -1,46 +1,9 @@
 #![allow(clippy::module_name_repetitions)]
 
-use crate::error::{Result, ZError};
-use serde::{Deserialize, Serialize};
+use crate::structs::{DataRow, DataSource, Result, ZError};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
-
-/// A row in the database
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataRow {
-    pub id: String,
-    #[serde(flatten)]
-    pub fields: HashMap<String, Value>,
-}
-
-/// Trait for data sources that can be queried
-pub trait DataSource: Send + Sync {
-    /// Query rows with optional filter and limit
-    ///
-    /// # Errors
-    /// Returns error if query fails
-    fn query(&self, filter: Option<&str>, limit: usize) -> Result<Vec<DataRow>>;
-
-    /// Get a specific row by ID
-    ///
-    /// # Errors
-    /// Returns error if lookup fails
-    fn get_row(&self, id: &str) -> Result<Option<DataRow>>;
-
-    /// Get all available row IDs
-    ///
-    /// # Errors
-    /// Returns error if retrieval fails
-    fn get_all_ids(&self) -> Result<Vec<String>>;
-
-    /// Get schema/column information
-    ///
-    /// # Errors
-    /// Returns error if schema retrieval fails
-    #[allow(dead_code)]
-    fn get_schema(&self) -> Result<Vec<String>>;
-}
 
 /// JSON file-based data source
 pub struct JsonDataSource {

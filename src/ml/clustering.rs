@@ -1,44 +1,8 @@
-use crate::error::{Result, ZError};
-use crate::ml::features::NormalizedFeatures;
+use crate::structs::{ClusterResult, NormalizedFeatures, Result, ZError};
 use linfa::traits::{Fit, Predict};
 use linfa::DatasetBase;
 use linfa_clustering::KMeans;
 use ndarray::Array2;
-use std::fmt::Write as _;
-
-/// Result of K-means clustering
-#[derive(Debug, Clone)]
-pub struct ClusterResult {
-    /// Cluster assignment for each sample
-    #[allow(dead_code)]
-    pub labels: Vec<usize>,
-    /// Number of clusters
-    pub k: usize,
-    /// Cluster sizes
-    pub sizes: Vec<usize>,
-    /// Original row indices for each cluster
-    pub cluster_members: Vec<Vec<usize>>,
-}
-
-impl ClusterResult {
-    /// Get summary for LLM context
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn summary(&self) -> String {
-        let mut s = format!("K-means clustering with k={}\n", self.k);
-        for (i, size) in self.sizes.iter().enumerate() {
-            let _ = writeln!(s, "  Cluster {i}: {size} samples");
-        }
-        s
-    }
-
-    /// Get row indices for a specific cluster
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn get_cluster(&self, cluster_id: usize) -> Option<&Vec<usize>> {
-        self.cluster_members.get(cluster_id)
-    }
-}
 
 /// Perform K-means clustering on normalized features
 ///
@@ -97,7 +61,11 @@ pub fn kmeans(features: &NormalizedFeatures, k: usize) -> Result<ClusterResult> 
 /// Find optimal k using elbow method (simplified)
 /// Returns suggested k value based on diminishing returns
 #[must_use]
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 pub fn suggest_k(features: &NormalizedFeatures, max_k: usize) -> usize {
     let n = features.n_samples();
     let max_k = max_k.min(n).max(1);
@@ -110,8 +78,7 @@ pub fn suggest_k(features: &NormalizedFeatures, max_k: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::csv_reader::CsvData;
-    use crate::ml::features::FeatureMatrix;
+    use crate::structs::{CsvData, FeatureMatrix};
     use std::io::Write;
     use tempfile::NamedTempFile;
 

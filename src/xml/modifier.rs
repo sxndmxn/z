@@ -1,4 +1,4 @@
-use crate::error::{Result, ZError};
+use crate::structs::{Result, XmlElement, ZError};
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 use std::cell::RefCell;
@@ -10,48 +10,6 @@ use std::path::Path;
 pub const MAX_XML_ELEMENTS: usize = 10;
 #[allow(dead_code)]
 pub const MAX_ELEMENT_CONTENT: usize = 500;
-
-/// Represents an element in the XML structure
-#[derive(Debug, Clone)]
-pub struct XmlElement {
-    pub path: String,
-    pub name: String,
-    pub attributes: Vec<(String, String)>,
-    pub text: Option<String>,
-    pub depth: usize,
-}
-
-impl XmlElement {
-    /// Format for display
-    #[must_use]
-    pub fn display(&self) -> String {
-        let attrs = if self.attributes.is_empty() {
-            String::new()
-        } else {
-            let attr_str: Vec<String> = self
-                .attributes
-                .iter()
-                .map(|(k, v)| format!("{k}=\"{v}\""))
-                .collect();
-            format!(" [{}]", attr_str.join(", "))
-        };
-
-        let text_preview = self
-            .text
-            .as_ref()
-            .map(|t| {
-                let preview = if t.len() > 50 {
-                    format!("{}...", &t[..50])
-                } else {
-                    t.clone()
-                };
-                format!(": \"{}\"", preview.replace('\n', "\\n"))
-            })
-            .unwrap_or_default();
-
-        format!("{}{attrs}{text_preview}", self.path)
-    }
-}
 
 /// XML modifier that can query and modify XML files
 pub struct XmlModifier {
