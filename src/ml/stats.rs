@@ -28,7 +28,7 @@ impl ColumnStats {
         let q3 = percentile(&sorted, 75.0);
         let iqr = q3 - q1;
 
-        Ok(ColumnStats {
+        Ok(Self {
             name: name.to_string(),
             count,
             mean,
@@ -74,7 +74,7 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 ///
 /// # Errors
 /// Returns error if vectors have different lengths or fewer than 2 values
-#[allow(dead_code, clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss)]
 pub fn correlation(x: &[f64], y: &[f64]) -> Result<f64> {
     if x.len() != y.len() {
         return Err(ZError::Ml("Vectors must have same length".into()));

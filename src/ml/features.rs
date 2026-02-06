@@ -48,7 +48,7 @@ impl FeatureMatrix {
             return Err(ZError::Ml("No complete rows with numeric data".into()));
         }
 
-        Ok(FeatureMatrix {
+        Ok(Self {
             names,
             data,
             row_indices,
@@ -116,7 +116,7 @@ mod tests {
         let csv = create_test_csv();
         let features = FeatureMatrix::from_csv(&csv).expect("extract features");
 
-        assert_eq!(features.n_samples(), 3);
+        assert_eq!(features.data.len(), 3);
         assert_eq!(features.n_features(), 2);
         assert_eq!(features.names, vec!["x", "y"]);
     }

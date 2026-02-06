@@ -1,9 +1,111 @@
 //! ML output file writers for the analyze phase
 
-use crate::structs::{Anomaly, ClusterResult, ColumnStats, CsvData, NormalizedFeatures, Result};
+use crate::structs::{
+    AnalysisResult, Anomaly, ClusterResult, ColumnStats, CorrelationMatrix, CsvData,
+    DbscanResult, NormalizedFeatures, PcaResult, Result,
+};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
+
+/// Build the summary text from analysis results
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn build_summary(
+    csv_path: &Path,
+    csv_data: &CsvData,
+    result: &AnalysisResult,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut summary = String::new();
+    let _ = writeln!(
+        summary,
+        "ML Analysis Summary for {}",
+        csv_path
+            .file_name()
+            .map_or("input", |n| n.to_str().unwrap_or("input"))
+    );
+    let _ = writeln!(summary, "================================");
+    let _ = writeln!(
+        summary,
+        "Rows: {}\nColumns: {} ({} numeric)",
+        csv_data.row_count(),
+        csv_data.col_count(),
+        result.column_stats.len()
+    );
+    let _ = writeln!(summary);
+    let _ = writeln!(summary, "Key Statistics:");
+    for stats in &result.column_stats {
+        let _ = writeln!(summary, "- {}", stats.summary());
+    }
+    let _ = writeln!(summary);
+    let _ = writeln!(summary, "Clustering (k={}):", result.cluster_result.k);
+    for (i, size) in result.cluster_result.sizes.iter().enumerate() {
+        let pct = (*size as f64 / csv_data.row_count() as f64) * 100.0;
+        let _ = writeln!(summary, "- Cluster {i} ({pct:.0}%): {size} samples");
+    }
+    let _ = writeln!(summary);
+    let _ = writeln!(summary, "Anomalies Detected: {} rows", result.anomalies.len());
+
+    // DBSCAN section
+    if let Some(dbscan) = &result.dbscan_result {
+        let _ = writeln!(summary);
+        let _ = writeln!(
+            summary,
+            "DBSCAN Results (eps={:.4}, min_points={}):",
+            dbscan.epsilon, dbscan.min_points
+        );
+        let _ = writeln!(summary, "- Clusters found: {}", dbscan.n_clusters);
+        let _ = writeln!(summary, "- Noise points: {}", dbscan.n_noise);
+        for (i, size) in dbscan.sizes.iter().enumerate() {
+            let _ = writeln!(summary, "- DBSCAN Cluster {i}: {size} samples");
+        }
+    }
+
+    // Correlation highlights
+    if let Some(corr) = &result.correlation {
+        let _ = writeln!(summary);
+        let _ = writeln!(summary, "Correlation Highlights:");
+        let n = corr.names.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let r = corr.matrix[i][j];
+                if r.abs() >= 0.7 {
+                    let strength = if r.abs() >= 0.9 {
+                        "very strong"
+                    } else {
+                        "strong"
+                    };
+                    let direction = if r > 0.0 { "positive" } else { "negative" };
+                    let _ = writeln!(
+                        summary,
+                        "- {} vs {}: {:.3} ({} {})",
+                        corr.names[i], corr.names[j], r, strength, direction
+                    );
+                }
+            }
+        }
+    }
+
+    // PCA section
+    if let Some(pca) = &result.pca {
+        let _ = writeln!(summary);
+        let _ = writeln!(summary, "PCA Variance ({} components):", pca.n_components);
+        for (i, &ratio) in pca.explained_variance_ratio.iter().enumerate() {
+            let cumulative = pca.cumulative_variance[i];
+            let _ = writeln!(
+                summary,
+                "- PC{}: {:.1}% (cumulative: {:.1}%)",
+                i + 1,
+                ratio * 100.0,
+                cumulative * 100.0
+            );
+        }
+    }
+
+    summary
+}
 
 /// Write `summary.txt` - human/LLM readable overview
 ///
@@ -85,17 +187,50 @@ pub fn write_anomalies(output_dir: &Path, anomalies: &[Anomaly]) -> Result<()> {
     Ok(())
 }
 
+/// Write `correlation.csv` - `NxN` correlation matrix
+///
+/// # Errors
+/// Returns error if file cannot be written
+pub fn write_correlation(output_dir: &Path, corr: &CorrelationMatrix) -> Result<()> {
+    use std::fmt::Write as _;
+
+    let path = output_dir.join("correlation.csv");
+    let mut content = String::new();
+
+    // Header
+    content.push_str("feature");
+    for name in &corr.names {
+        let _ = write!(content, ",{name}");
+    }
+    content.push('\n');
+
+    // Rows
+    for (i, name) in corr.names.iter().enumerate() {
+        content.push_str(name);
+        for j in 0..corr.names.len() {
+            let _ = write!(content, ",{:.4}", corr.matrix[i][j]);
+        }
+        content.push('\n');
+    }
+
+    fs::write(path, content)?;
+    Ok(())
+}
+
 /// Write `stats.json` - machine-readable statistics
 ///
 /// # Errors
 /// Returns error if file cannot be written
-#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
 pub fn write_stats_json(
     output_dir: &Path,
     csv_data: &CsvData,
     stats: &[&ColumnStats],
     clusters: &ClusterResult,
     anomalies: &[Anomaly],
+    dbscan: Option<&DbscanResult>,
+    correlations: Option<&CorrelationMatrix>,
+    pca: Option<&PcaResult>,
 ) -> Result<()> {
     let path = output_dir.join("stats.json");
 
@@ -126,6 +261,33 @@ pub fn write_stats_json(
         })
         .collect();
 
+    let dbscan_json = dbscan.map(|d| DbscanEntry {
+        epsilon: d.epsilon,
+        min_points: d.min_points,
+        n_clusters: d.n_clusters,
+        n_noise: d.n_noise,
+        sizes: d.sizes.clone(),
+    });
+
+    let correlations_json = correlations.map(|c| CorrelationEntry {
+        names: c.names.clone(),
+        matrix: c.matrix.clone(),
+    });
+
+    let pca_json = pca.map(|p| PcaEntry {
+        n_components: p.n_components,
+        explained_variance_ratio: p.explained_variance_ratio.clone(),
+        cumulative_variance: p.cumulative_variance.clone(),
+        feature_importance: p
+            .feature_importance
+            .iter()
+            .map(|(name, imp)| FeatureImportance {
+                name: name.clone(),
+                importance: *imp,
+            })
+            .collect(),
+    });
+
     let output = StatsOutput {
         row_count: csv_data.row_count(),
         column_count: csv_data.col_count(),
@@ -139,6 +301,9 @@ pub fn write_stats_json(
             total: anomalies.len(),
             by_type: count_by_type(anomalies),
         },
+        dbscan: dbscan_json,
+        correlations: correlations_json,
+        pca: pca_json,
     };
 
     let json = serde_json::to_string_pretty(&output)?;
@@ -183,6 +348,12 @@ struct StatsOutput {
     statistics: Vec<StatsEntry>,
     clustering: ClusteringSummary,
     anomalies_summary: AnomaliesSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dbscan: Option<DbscanEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    correlations: Option<CorrelationEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pca: Option<PcaEntry>,
 }
 
 #[derive(Serialize)]
@@ -224,6 +395,35 @@ struct AnomalyTypeCount {
     count: usize,
 }
 
+#[derive(Serialize)]
+struct DbscanEntry {
+    epsilon: f64,
+    min_points: usize,
+    n_clusters: usize,
+    n_noise: usize,
+    sizes: Vec<usize>,
+}
+
+#[derive(Serialize)]
+struct CorrelationEntry {
+    names: Vec<String>,
+    matrix: Vec<Vec<f64>>,
+}
+
+#[derive(Serialize)]
+struct PcaEntry {
+    n_components: usize,
+    explained_variance_ratio: Vec<f64>,
+    cumulative_variance: Vec<f64>,
+    feature_importance: Vec<FeatureImportance>,
+}
+
+#[derive(Serialize)]
+struct FeatureImportance {
+    name: String,
+    importance: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,6 +462,21 @@ mod tests {
         assert!(content.contains("row_id,anomaly_type,score,details"));
         assert!(content.contains("1,price_outlier,0.9500"));
         assert!(content.contains("5,rating_outlier,0.8700"));
+    }
+
+    #[test]
+    fn test_write_correlation() {
+        let dir = TempDir::new().expect("create temp dir");
+        let corr = CorrelationMatrix {
+            names: vec!["a".to_string(), "b".to_string()],
+            matrix: vec![vec![1.0, 0.95], vec![0.95, 1.0]],
+        };
+
+        write_correlation(dir.path(), &corr).expect("write correlation");
+
+        let content = fs::read_to_string(dir.path().join("correlation.csv")).expect("read");
+        assert!(content.contains("feature,a,b"));
+        assert!(content.contains("a,1.0000,0.9500"));
     }
 
     #[test]

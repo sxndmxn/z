@@ -6,11 +6,10 @@ use crate::structs::{
 };
 use crate::xml::XmlModifier;
 use serde_json::{json, Value};
+use std::sync::LazyLock;
 
-/// Get the tool definitions for the modify phase
-#[must_use]
 #[allow(clippy::too_many_lines)]
-pub fn get_modify_tool_definitions() -> Vec<ToolDefinition> {
+static MODIFY_TOOL_DEFINITIONS: LazyLock<Vec<ToolDefinition>> = LazyLock::new(|| {
     vec![
         // Context tools
         ToolDefinition {
@@ -179,6 +178,12 @@ pub fn get_modify_tool_definitions() -> Vec<ToolDefinition> {
             },
         },
     ]
+});
+
+/// Get the tool definitions for the modify phase
+#[must_use]
+pub fn get_modify_tool_definitions() -> &'static [ToolDefinition] {
+    &MODIFY_TOOL_DEFINITIONS
 }
 
 /// Tool handler for the modify phase
@@ -191,8 +196,8 @@ pub struct ModifyToolHandler<'a> {
 
 impl<'a> ModifyToolHandler<'a> {
     #[must_use]
-    pub fn new(context: &'a ContextManager, xml: &'a XmlModifier) -> Self {
-        ModifyToolHandler {
+    pub const fn new(context: &'a ContextManager, xml: &'a XmlModifier) -> Self {
+        Self {
             context,
             xml,
             modifications: Vec::new(),
@@ -206,7 +211,10 @@ impl<'a> ModifyToolHandler<'a> {
     /// Returns error if tool execution fails
     pub fn execute(&mut self, tool_call: &ToolCall) -> Result<ToolResult> {
         let args: Value =
-            serde_json::from_str(&tool_call.function.arguments).unwrap_or(json!({}));
+            serde_json::from_str(&tool_call.function.arguments).unwrap_or_else(|e| {
+                eprintln!("Warning: malformed tool args: {e}");
+                json!({})
+            });
 
         let content = match tool_call.function.name.as_str() {
             "list_files" => self.handle_list_files(),
@@ -228,7 +236,7 @@ impl<'a> ModifyToolHandler<'a> {
 
     /// Check if finished signal was received
     #[must_use]
-    pub fn is_finished(&self) -> bool {
+    pub const fn is_finished(&self) -> bool {
         self.finished
     }
 
@@ -325,10 +333,10 @@ impl<'a> ModifyToolHandler<'a> {
             .and_then(Value::as_str)
             .ok_or_else(|| ZError::ToolCall("Missing path parameter".into()))?;
 
-        match self.xml.get_element(path)? {
-            Some(elem) => Ok(format!("Element: {}", elem.display())),
-            None => Ok(format!("No element at path '{path}'")),
-        }
+        self.xml.get_element(path)?.map_or_else(
+            || Ok(format!("No element at path '{path}'")),
+            |elem| Ok(format!("Element: {}", elem.display())),
+        )
     }
 
     fn handle_modify_xml(&mut self, args: &Value) -> Result<String> {

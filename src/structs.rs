@@ -4,7 +4,6 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use thiserror::Error;
 
 // ============================================================================
@@ -37,10 +36,6 @@ pub enum ZError {
     #[error("Tool call error: {0}")]
     ToolCall(String),
 
-    #[allow(dead_code)]
-    #[error("Database error: {0}")]
-    Database(String),
-
     #[error("ML error: {0}")]
     Ml(String),
 
@@ -50,7 +45,7 @@ pub enum ZError {
 
 impl From<ureq::Error> for ZError {
     fn from(e: ureq::Error) -> Self {
-        ZError::Http(Box::new(e))
+        Self::Http(Box::new(e))
     }
 }
 
@@ -81,7 +76,7 @@ impl FileType {
     }
 
     #[must_use]
-    pub fn display_name(self) -> &'static str {
+    pub const fn display_name(self) -> &'static str {
         match self {
             Self::Text => "text",
             Self::Csv => "csv",
@@ -128,21 +123,14 @@ pub struct CsvData {
 impl CsvData {
     /// Get number of rows
     #[must_use]
-    pub fn row_count(&self) -> usize {
+    pub const fn row_count(&self) -> usize {
         self.rows.len()
     }
 
     /// Get number of columns
     #[must_use]
-    pub fn col_count(&self) -> usize {
+    pub const fn col_count(&self) -> usize {
         self.headers.len()
-    }
-
-    /// Get column index by name
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn column_index(&self, name: &str) -> Option<usize> {
-        self.headers.iter().position(|h| h == name)
     }
 
     /// Get a column as a vector of strings
@@ -157,17 +145,6 @@ impl CsvData {
                 .filter_map(|row| row.get(index).map(String::as_str))
                 .collect(),
         )
-    }
-
-    /// Get numeric values from a column (skipping non-numeric)
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn numeric_column(&self, index: usize) -> Option<Vec<f64>> {
-        self.column(index).map(|col| {
-            col.iter()
-                .filter_map(|s| s.parse::<f64>().ok())
-                .collect()
-        })
     }
 
     /// Find columns that contain numeric data
@@ -192,50 +169,6 @@ impl CsvData {
             .collect()
     }
 
-    /// Get a row by index
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn row(&self, index: usize) -> Option<&Vec<String>> {
-        self.rows.get(index)
-    }
-
-    /// Convert to a summary string for LLM context
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn summary(&self) -> String {
-        use std::fmt::Write as _;
-
-        let mut summary = format!(
-            "CSV Data: {} rows x {} columns\n",
-            self.row_count(),
-            self.col_count()
-        );
-        summary.push_str("Columns: ");
-        summary.push_str(&self.headers.join(", "));
-        summary.push('\n');
-
-        let numeric_cols = self.numeric_column_indices();
-        if !numeric_cols.is_empty() {
-            let numeric_names: Vec<&str> = numeric_cols
-                .iter()
-                .filter_map(|&i| self.headers.get(i).map(String::as_str))
-                .collect();
-            let _ = writeln!(summary, "Numeric columns: {}", numeric_names.join(", "));
-        }
-
-        // Show first few rows as preview
-        let preview_count = std::cmp::min(3, self.row_count());
-        if preview_count > 0 {
-            let _ = writeln!(summary, "\nFirst {preview_count} rows:");
-            for i in 0..preview_count {
-                if let Some(row) = self.row(i) {
-                    let _ = writeln!(summary, "  {}: {}", i + 1, row.join(", "));
-                }
-            }
-        }
-
-        summary
-    }
 }
 
 // ============================================================================
@@ -254,16 +187,9 @@ pub struct FeatureMatrix {
 }
 
 impl FeatureMatrix {
-    /// Get number of samples (rows)
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn n_samples(&self) -> usize {
-        self.data.len()
-    }
-
     /// Get number of features (columns)
     #[must_use]
-    pub fn n_features(&self) -> usize {
+    pub const fn n_features(&self) -> usize {
         self.names.len()
     }
 
@@ -276,12 +202,6 @@ impl FeatureMatrix {
         Some(self.data.iter().map(|row| row[index]).collect())
     }
 
-    /// Convert to flat `Vec<f64>` (row-major)
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn to_flat(&self) -> Vec<f64> {
-        self.data.iter().flatten().copied().collect()
-    }
 }
 
 /// Normalized feature matrix with scaling parameters
@@ -299,13 +219,13 @@ pub struct NormalizedFeatures {
 impl NormalizedFeatures {
     /// Get number of samples
     #[must_use]
-    pub fn n_samples(&self) -> usize {
+    pub const fn n_samples(&self) -> usize {
         self.data.len()
     }
 
     /// Get number of features
     #[must_use]
-    pub fn n_features(&self) -> usize {
+    pub const fn n_features(&self) -> usize {
         self.names.len()
     }
 
@@ -315,13 +235,6 @@ impl NormalizedFeatures {
         self.data.iter().flatten().copied().collect()
     }
 
-    /// Denormalize a single value
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn denormalize(&self, feature_idx: usize, normalized_val: f64) -> f64 {
-        let range = self.maxs[feature_idx] - self.mins[feature_idx];
-        self.mins[feature_idx] + normalized_val * range
-    }
 }
 
 /// Descriptive statistics for a numeric column
@@ -343,8 +256,8 @@ impl ColumnStats {
     /// Detect outliers using IQR method (values outside 1.5 * IQR)
     #[must_use]
     pub fn outlier_indices(&self, values: &[f64]) -> Vec<usize> {
-        let lower_bound = self.q1 - 1.5 * self.iqr;
-        let upper_bound = self.q3 + 1.5 * self.iqr;
+        let lower_bound = 1.5f64.mul_add(-self.iqr, self.q1);
+        let upper_bound = 1.5f64.mul_add(self.iqr, self.q3);
 
         values
             .iter()
@@ -368,36 +281,11 @@ impl ColumnStats {
 #[derive(Debug, Clone)]
 pub struct ClusterResult {
     /// Cluster assignment for each sample
-    #[allow(dead_code)]
     pub labels: Vec<usize>,
     /// Number of clusters
     pub k: usize,
     /// Cluster sizes
     pub sizes: Vec<usize>,
-    /// Original row indices for each cluster
-    pub cluster_members: Vec<Vec<usize>>,
-}
-
-impl ClusterResult {
-    /// Get summary for LLM context
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn summary(&self) -> String {
-        use std::fmt::Write as _;
-
-        let mut s = format!("K-means clustering with k={}\n", self.k);
-        for (i, size) in self.sizes.iter().enumerate() {
-            let _ = writeln!(s, "  Cluster {i}: {size} samples");
-        }
-        s
-    }
-
-    /// Get row indices for a specific cluster
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn get_cluster(&self, cluster_id: usize) -> Option<&Vec<usize>> {
-        self.cluster_members.get(cluster_id)
-    }
 }
 
 /// Represents an anomaly detected in the data
@@ -408,6 +296,44 @@ pub struct Anomaly {
     pub anomaly_type: String,
     pub score: f64,
     pub details: String,
+}
+
+/// Correlation matrix between numeric features
+#[derive(Debug, Clone)]
+pub struct CorrelationMatrix {
+    pub names: Vec<String>,
+    pub matrix: Vec<Vec<f64>>,
+}
+
+/// Result of DBSCAN clustering
+#[derive(Debug, Clone)]
+pub struct DbscanResult {
+    pub labels: Vec<Option<usize>>,
+    pub n_clusters: usize,
+    pub n_noise: usize,
+    pub sizes: Vec<usize>,
+    pub epsilon: f64,
+    pub min_points: usize,
+}
+
+/// Result of PCA dimensionality reduction
+#[derive(Debug, Clone)]
+pub struct PcaResult {
+    pub n_components: usize,
+    pub explained_variance_ratio: Vec<f64>,
+    pub cumulative_variance: Vec<f64>,
+    pub feature_importance: Vec<(String, f64)>,
+}
+
+/// Combined result of the full analysis pipeline
+#[derive(Debug, Clone)]
+pub struct AnalysisResult {
+    pub column_stats: Vec<ColumnStats>,
+    pub cluster_result: ClusterResult,
+    pub dbscan_result: Option<DbscanResult>,
+    pub anomalies: Vec<Anomaly>,
+    pub correlation: Option<CorrelationMatrix>,
+    pub pca: Option<PcaResult>,
 }
 
 // ============================================================================
@@ -520,43 +446,3 @@ pub struct ToolResult {
     pub content: String,
 }
 
-// ============================================================================
-// Database Types
-// ============================================================================
-
-/// A row in the database
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataRow {
-    pub id: String,
-    #[serde(flatten)]
-    pub fields: HashMap<String, Value>,
-}
-
-/// Trait for data sources that can be queried
-#[allow(dead_code)]
-pub trait DataSource: Send + Sync {
-    /// Query rows with optional filter and limit
-    ///
-    /// # Errors
-    /// Returns error if query fails
-    fn query(&self, filter: Option<&str>, limit: usize) -> Result<Vec<DataRow>>;
-
-    /// Get a specific row by ID
-    ///
-    /// # Errors
-    /// Returns error if lookup fails
-    fn get_row(&self, id: &str) -> Result<Option<DataRow>>;
-
-    /// Get all available row IDs
-    ///
-    /// # Errors
-    /// Returns error if retrieval fails
-    fn get_all_ids(&self) -> Result<Vec<String>>;
-
-    /// Get schema/column information
-    ///
-    /// # Errors
-    /// Returns error if schema retrieval fails
-    #[allow(dead_code)]
-    fn get_schema(&self) -> Result<Vec<String>>;
-}

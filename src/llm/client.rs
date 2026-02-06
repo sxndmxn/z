@@ -47,7 +47,7 @@ impl<'a> LlmClient<'a> {
             tool_call_id: None,
         }];
 
-        LlmClient {
+        Self {
             server,
             messages,
             max_turns,
@@ -57,7 +57,7 @@ impl<'a> LlmClient<'a> {
 
     /// Get total token usage
     #[must_use]
-    pub fn total_usage(&self) -> Usage {
+    pub const fn total_usage(&self) -> Usage {
         self.total_usage
     }
 
@@ -87,7 +87,7 @@ impl<'a> LlmClient<'a> {
             eprintln!("LLM turn {}/{}...", turn + 1, self.max_turns);
 
             // Make request to LLM
-            let response = self.send_request(&tools)?;
+            let response = self.send_request(tools)?;
 
             // Check for tool calls
             if let Some(tool_calls) = &response.tool_calls {

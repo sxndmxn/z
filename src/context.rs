@@ -88,7 +88,7 @@ impl ContextManager {
         // Sort by filename for consistent ordering
         file_index.sort_by(|a, b| a.filename.cmp(&b.filename));
 
-        Ok(ContextManager {
+        Ok(Self {
             context_dir: dir.to_path_buf(),
             file_index,
             loaded_files: RefCell::new(HashMap::new()),
@@ -97,7 +97,7 @@ impl ContextManager {
 
     /// Get number of indexed files
     #[must_use]
-    pub fn file_count(&self) -> usize {
+    pub const fn file_count(&self) -> usize {
         self.file_index.len()
     }
 
@@ -140,7 +140,7 @@ impl ContextManager {
                 content.len()
             )
         } else {
-            content.clone()
+            content
         };
 
         // Cache it
@@ -214,16 +214,22 @@ impl ContextManager {
     }
 }
 
-/// Truncate a string to max chars, breaking at word boundary if possible
+/// Truncate a string to max chars (UTF-8 safe), breaking at word boundary if possible
 fn truncate_string(s: &str, max_chars: usize) -> String {
-    if s.len() <= max_chars {
+    if s.chars().count() <= max_chars {
         return s.to_string();
     }
 
+    // Find the byte boundary for max_chars characters
+    let byte_end = s
+        .char_indices()
+        .nth(max_chars)
+        .map_or(s.len(), |(idx, _)| idx);
+    let truncated = &s[..byte_end];
+
     // Try to break at a word boundary
-    let truncated = &s[..max_chars];
     if let Some(last_space) = truncated.rfind(char::is_whitespace) {
-        if last_space > max_chars / 2 {
+        if last_space > byte_end / 2 {
             return s[..last_space].to_string();
         }
     }

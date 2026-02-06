@@ -1,4 +1,4 @@
-use crate::error::{Result, ZError};
+use crate::structs::{Result, ZError};
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,8 +10,6 @@ use std::time::{Duration, Instant};
 pub struct LlamaServer {
     child: Option<Child>,
     port: u16,
-    #[allow(dead_code)]
-    shutdown: Arc<AtomicBool>,
 }
 
 impl LlamaServer {
@@ -31,7 +29,6 @@ impl LlamaServer {
     /// Returns error if server fails to start
     pub fn spawn(server_path: &str, model_path: &str, context_size: u32, gpu_layers: u32) -> Result<Self> {
         let port = Self::find_available_port()?;
-        let shutdown = Arc::new(AtomicBool::new(false));
 
         eprintln!("Starting llama-server on port {port}...");
 
@@ -48,10 +45,9 @@ impl LlamaServer {
             .spawn()
             .map_err(|e| ZError::LlmServer(format!("Failed to spawn llama-server: {e}")))?;
 
-        let server = LlamaServer {
+        let server = Self {
             child: Some(child),
             port,
-            shutdown,
         };
 
         // Wait for server to be ready
@@ -95,23 +91,6 @@ impl LlamaServer {
                 }
             }
         }
-    }
-
-    /// Check if server is healthy
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn is_healthy(&self) -> bool {
-        let health_url = format!("{}/health", self.url());
-        matches!(
-            ureq::get(&health_url).timeout(Duration::from_secs(2)).call(),
-            Ok(response) if response.status() == 200
-        )
-    }
-
-    /// Signal shutdown
-    #[allow(dead_code)]
-    pub fn signal_shutdown(&self) {
-        self.shutdown.store(true, Ordering::SeqCst);
     }
 
     /// Kill the server process

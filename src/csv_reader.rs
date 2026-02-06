@@ -27,7 +27,7 @@ impl CsvData {
             rows.push(row);
         }
 
-        Ok(CsvData { headers, rows })
+        Ok(Self { headers, rows })
     }
 }
 
@@ -67,14 +67,4 @@ mod tests {
         assert_eq!(numeric, vec![1, 2]);
     }
 
-    #[test]
-    fn test_get_numeric_column() {
-        let csv_content = "name,value\na,1.0\nb,2.0\nc,3.0";
-        let file = create_test_csv(csv_content);
-
-        let data = CsvData::from_file(file.path(), false).expect("parse csv");
-        let values = data.numeric_column(1).expect("get column");
-
-        assert_eq!(values, vec![1.0, 2.0, 3.0]);
-    }
 }
