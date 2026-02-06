@@ -1,35 +1,12 @@
 use crate::context::ContextManager;
-use crate::error::{Result, ZError};
 use crate::llm::server::LlamaServer;
-use crate::llm::tools::{get_modify_tool_definitions, ModifyToolHandler, ToolCall};
+use crate::llm::tools::{get_modify_tool_definitions, ModifyToolHandler};
+use crate::structs::{Message, Result, ToolCall, ToolDefinition, Usage, ZError};
 use crate::xml::XmlModifier;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 
-/// Message in the conversation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message {
-    pub role: String,
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-}
-
-/// Token usage from API response
-#[derive(Debug, Deserialize, Default, Clone, Copy)]
-#[allow(clippy::struct_field_names)]
-pub struct Usage {
-    #[serde(default)]
-    pub prompt_tokens: u32,
-    #[serde(default)]
-    pub completion_tokens: u32,
-    #[serde(default)]
-    pub total_tokens: u32,
-}
-
-/// Response from the LLM
+/// Response from the LLM (private)
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
@@ -70,7 +47,7 @@ impl<'a> LlmClient<'a> {
             tool_call_id: None,
         }];
 
-        LlmClient {
+        Self {
             server,
             messages,
             max_turns,
@@ -80,7 +57,7 @@ impl<'a> LlmClient<'a> {
 
     /// Get total token usage
     #[must_use]
-    pub fn total_usage(&self) -> Usage {
+    pub const fn total_usage(&self) -> Usage {
         self.total_usage
     }
 
@@ -110,7 +87,7 @@ impl<'a> LlmClient<'a> {
             eprintln!("LLM turn {}/{}...", turn + 1, self.max_turns);
 
             // Make request to LLM
-            let response = self.send_request(&tools)?;
+            let response = self.send_request(tools)?;
 
             // Check for tool calls
             if let Some(tool_calls) = &response.tool_calls {
@@ -156,10 +133,7 @@ impl<'a> LlmClient<'a> {
     }
 
     /// Send a request to the LLM
-    fn send_request(
-        &mut self,
-        tools: &[crate::llm::tools::ToolDefinition],
-    ) -> Result<ResponseMessage> {
+    fn send_request(&mut self, tools: &[ToolDefinition]) -> Result<ResponseMessage> {
         let body = json!({
             "model": "default",
             "messages": self.messages,

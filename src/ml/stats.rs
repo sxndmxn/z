@@ -1,19 +1,4 @@
-use crate::error::{Result, ZError};
-
-/// Descriptive statistics for a numeric column
-#[derive(Debug, Clone)]
-pub struct ColumnStats {
-    pub name: String,
-    pub count: usize,
-    pub mean: f64,
-    pub std_dev: f64,
-    pub min: f64,
-    pub max: f64,
-    pub q1: f64,
-    pub median: f64,
-    pub q3: f64,
-    pub iqr: f64,
-}
+use crate::structs::{ColumnStats, Result, ZError};
 
 impl ColumnStats {
     /// Calculate statistics for a vector of values
@@ -43,7 +28,7 @@ impl ColumnStats {
         let q3 = percentile(&sorted, 75.0);
         let iqr = q3 - q1;
 
-        Ok(ColumnStats {
+        Ok(Self {
             name: name.to_string(),
             count,
             mean,
@@ -56,33 +41,14 @@ impl ColumnStats {
             iqr,
         })
     }
-
-    /// Detect outliers using IQR method (values outside 1.5 * IQR)
-    #[must_use]
-    pub fn outlier_indices(&self, values: &[f64]) -> Vec<usize> {
-        let lower_bound = self.q1 - 1.5 * self.iqr;
-        let upper_bound = self.q3 + 1.5 * self.iqr;
-
-        values
-            .iter()
-            .enumerate()
-            .filter(|(_, &v)| v < lower_bound || v > upper_bound)
-            .map(|(i, _)| i)
-            .collect()
-    }
-
-    /// Format as a summary string
-    #[must_use]
-    pub fn summary(&self) -> String {
-        format!(
-            "{}: n={}, mean={:.2}, std={:.2}, min={:.2}, Q1={:.2}, median={:.2}, Q3={:.2}, max={:.2}, IQR={:.2}",
-            self.name, self.count, self.mean, self.std_dev, self.min, self.q1, self.median, self.q3, self.max, self.iqr
-        )
-    }
 }
 
 /// Calculate percentile using linear interpolation
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
@@ -108,7 +74,7 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 ///
 /// # Errors
 /// Returns error if vectors have different lengths or fewer than 2 values
-#[allow(dead_code, clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss)]
 pub fn correlation(x: &[f64], y: &[f64]) -> Result<f64> {
     if x.len() != y.len() {
         return Err(ZError::Ml("Vectors must have same length".into()));

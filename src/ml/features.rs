@@ -1,16 +1,4 @@
-use crate::csv_reader::CsvData;
-use crate::error::{Result, ZError};
-
-/// Feature matrix extracted from CSV data
-#[derive(Debug, Clone)]
-pub struct FeatureMatrix {
-    /// Feature names (column headers)
-    pub names: Vec<String>,
-    /// Row data as feature vectors
-    pub data: Vec<Vec<f64>>,
-    /// Original row indices (for mapping back)
-    pub row_indices: Vec<usize>,
-}
+use crate::structs::{CsvData, FeatureMatrix, NormalizedFeatures, Result, ZError};
 
 impl FeatureMatrix {
     /// Extract numeric features from CSV data
@@ -60,33 +48,11 @@ impl FeatureMatrix {
             return Err(ZError::Ml("No complete rows with numeric data".into()));
         }
 
-        Ok(FeatureMatrix {
+        Ok(Self {
             names,
             data,
             row_indices,
         })
-    }
-
-    /// Get number of samples (rows)
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn n_samples(&self) -> usize {
-        self.data.len()
-    }
-
-    /// Get number of features (columns)
-    #[must_use]
-    pub fn n_features(&self) -> usize {
-        self.names.len()
-    }
-
-    /// Get a feature column by index
-    #[must_use]
-    pub fn column(&self, index: usize) -> Option<Vec<f64>> {
-        if index >= self.n_features() {
-            return None;
-        }
-        Some(self.data.iter().map(|row| row[index]).collect())
     }
 
     /// Normalize features using min-max scaling to [0, 1]
@@ -130,53 +96,6 @@ impl FeatureMatrix {
             maxs,
         }
     }
-
-    /// Convert to flat `Vec<f64>` (row-major)
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn to_flat(&self) -> Vec<f64> {
-        self.data.iter().flatten().copied().collect()
-    }
-}
-
-/// Normalized feature matrix with scaling parameters
-#[derive(Debug, Clone)]
-pub struct NormalizedFeatures {
-    pub names: Vec<String>,
-    pub data: Vec<Vec<f64>>,
-    pub row_indices: Vec<usize>,
-    #[allow(dead_code)]
-    pub mins: Vec<f64>,
-    #[allow(dead_code)]
-    pub maxs: Vec<f64>,
-}
-
-impl NormalizedFeatures {
-    /// Get number of samples
-    #[must_use]
-    pub fn n_samples(&self) -> usize {
-        self.data.len()
-    }
-
-    /// Get number of features
-    #[must_use]
-    pub fn n_features(&self) -> usize {
-        self.names.len()
-    }
-
-    /// Convert to flat `Vec<f64>` (row-major)
-    #[must_use]
-    pub fn to_flat(&self) -> Vec<f64> {
-        self.data.iter().flatten().copied().collect()
-    }
-
-    /// Denormalize a single value
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn denormalize(&self, feature_idx: usize, normalized_val: f64) -> f64 {
-        let range = self.maxs[feature_idx] - self.mins[feature_idx];
-        self.mins[feature_idx] + normalized_val * range
-    }
 }
 
 #[cfg(test)]
@@ -197,7 +116,7 @@ mod tests {
         let csv = create_test_csv();
         let features = FeatureMatrix::from_csv(&csv).expect("extract features");
 
-        assert_eq!(features.n_samples(), 3);
+        assert_eq!(features.data.len(), 3);
         assert_eq!(features.n_features(), 2);
         assert_eq!(features.names, vec!["x", "y"]);
     }

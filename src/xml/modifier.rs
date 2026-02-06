@@ -1,4 +1,4 @@
-use crate::error::{Result, ZError};
+use crate::structs::{Result, XmlElement, ZError};
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 use std::cell::RefCell;
@@ -8,50 +8,6 @@ use std::path::Path;
 
 /// Size limits for LLM tool responses
 pub const MAX_XML_ELEMENTS: usize = 10;
-#[allow(dead_code)]
-pub const MAX_ELEMENT_CONTENT: usize = 500;
-
-/// Represents an element in the XML structure
-#[derive(Debug, Clone)]
-pub struct XmlElement {
-    pub path: String,
-    pub name: String,
-    pub attributes: Vec<(String, String)>,
-    pub text: Option<String>,
-    pub depth: usize,
-}
-
-impl XmlElement {
-    /// Format for display
-    #[must_use]
-    pub fn display(&self) -> String {
-        let attrs = if self.attributes.is_empty() {
-            String::new()
-        } else {
-            let attr_str: Vec<String> = self
-                .attributes
-                .iter()
-                .map(|(k, v)| format!("{k}=\"{v}\""))
-                .collect();
-            format!(" [{}]", attr_str.join(", "))
-        };
-
-        let text_preview = self
-            .text
-            .as_ref()
-            .map(|t| {
-                let preview = if t.len() > 50 {
-                    format!("{}...", &t[..50])
-                } else {
-                    t.clone()
-                };
-                format!(": \"{}\"", preview.replace('\n', "\\n"))
-            })
-            .unwrap_or_default();
-
-        format!("{}{attrs}{text_preview}", self.path)
-    }
-}
 
 /// XML modifier that can query and modify XML files
 pub struct XmlModifier {
@@ -65,7 +21,7 @@ impl XmlModifier {
     /// Returns error if file cannot be read
     pub fn from_file(path: &Path) -> Result<Self> {
         let content = fs::read_to_string(path)?;
-        Ok(XmlModifier {
+        Ok(Self {
             content: RefCell::new(content),
         })
     }
@@ -73,8 +29,8 @@ impl XmlModifier {
     /// Load XML from a string
     #[allow(dead_code)]
     #[must_use]
-    pub fn from_string(content: String) -> Self {
-        XmlModifier {
+    pub const fn from_string(content: String) -> Self {
+        Self {
             content: RefCell::new(content),
         }
     }
@@ -180,14 +136,7 @@ impl XmlModifier {
         let matched: Vec<XmlElement> = elements
             .into_iter()
             .filter(|e| {
-                // Match path pattern
-                let path_matches = if path_pattern.contains('/') {
-                    e.path.ends_with(&path_pattern) || e.path == path_pattern
-                } else {
-                    e.name == path_pattern
-                };
-
-                if !path_matches {
+                if !path_matches(&e.path, &e.name, &path_pattern) {
                     return false;
                 }
 
@@ -237,14 +186,10 @@ impl XmlModifier {
                     path_stack.push(name.clone());
 
                     let current_path = path_stack.join("/");
-                    let path_matches = current_path.ends_with(&path_pattern)
-                        || current_path == path_pattern
-                        || name == path_pattern;
+                    let matches_path = path_matches(&current_path, &name, &path_pattern);
+                    let attr_matches = check_attr_filter(&e, attr_filter.as_ref());
 
-                    let attr_matches =
-                        check_attr_filter(&e, attr_filter.as_ref());
-
-                    in_target = path_matches && attr_matches && !modified;
+                    in_target = matches_path && attr_matches && !modified;
                     writer.write_event(Event::Start(e))?;
                 }
                 Ok(Event::Text(e)) => {
@@ -305,13 +250,10 @@ impl XmlModifier {
                     path_stack.push(name.clone());
 
                     let current_path = path_stack.join("/");
-                    let path_matches = current_path.ends_with(&path_pattern)
-                        || current_path == path_pattern
-                        || name == path_pattern;
-
+                    let matches_path = path_matches(&current_path, &name, &path_pattern);
                     let attr_matches = check_attr_filter(&e, existing_filter.as_ref());
 
-                    if path_matches && attr_matches && !modified {
+                    if matches_path && attr_matches && !modified {
                         let new_elem =
                             build_element_with_attr(&e, &name, attr_name, attr_value);
                         writer.write_event(Event::Start(new_elem))?;
@@ -329,13 +271,10 @@ impl XmlModifier {
                     path_stack.push(name.clone());
 
                     let current_path = path_stack.join("/");
-                    let path_matches = current_path.ends_with(&path_pattern)
-                        || current_path == path_pattern
-                        || name == path_pattern;
-
+                    let matches_path = path_matches(&current_path, &name, &path_pattern);
                     let attr_matches = check_attr_filter(&e, existing_filter.as_ref());
 
-                    if path_matches && attr_matches && !modified {
+                    if matches_path && attr_matches && !modified {
                         let new_elem =
                             build_element_with_attr(&e, &name, attr_name, attr_value);
                         writer.write_event(Event::Empty(new_elem))?;
@@ -387,13 +326,10 @@ impl XmlModifier {
                     }
 
                     let current_path = path_stack.join("/");
-                    let path_matches = current_path.ends_with(&path_pattern)
-                        || current_path == path_pattern
-                        || name == path_pattern;
-
+                    let matches_path = path_matches(&current_path, &name, &path_pattern);
                     let attr_matches = check_attr_filter(&e, attr_filter.as_ref());
 
-                    if path_matches && attr_matches && !modified {
+                    if matches_path && attr_matches && !modified {
                         skip_depth = Some(path_stack.len());
                         modified = true;
                     } else {
@@ -419,13 +355,10 @@ impl XmlModifier {
 
                     if skip_depth.is_none() {
                         let current_path = path_stack.join("/");
-                        let path_matches = current_path.ends_with(&path_pattern)
-                            || current_path == path_pattern
-                            || name == path_pattern;
-
+                        let matches_path = path_matches(&current_path, &name, &path_pattern);
                         let attr_matches = check_attr_filter(&e, attr_filter.as_ref());
 
-                        if path_matches && attr_matches && !modified {
+                        if matches_path && attr_matches && !modified {
                             modified = true;
                         } else {
                             writer.write_event(Event::Empty(e))?;
@@ -485,13 +418,10 @@ impl XmlModifier {
                     path_stack.push(name.clone());
 
                     let current_path = path_stack.join("/");
-                    let path_matches = current_path.ends_with(&path_pattern)
-                        || current_path == path_pattern
-                        || name == path_pattern;
-
+                    let matches_path = path_matches(&current_path, &name, &path_pattern);
                     let attr_matches = check_attr_filter(&e, attr_filter.as_ref());
 
-                    if path_matches && attr_matches && !modified {
+                    if matches_path && attr_matches && !modified {
                         target_depth = Some(path_stack.len());
                     }
 
@@ -515,13 +445,10 @@ impl XmlModifier {
 
                     // For empty parent elements, expand them
                     let current_path = format!("{}/{name}", path_stack.join("/"));
-                    let path_matches = current_path.ends_with(&path_pattern)
-                        || current_path == path_pattern
-                        || name == path_pattern;
-
+                    let matches_path = path_matches(&current_path, &name, &path_pattern);
                     let attr_matches = check_attr_filter(&e, attr_filter.as_ref());
 
-                    if path_matches && attr_matches && !modified {
+                    if matches_path && attr_matches && !modified {
                         // Convert empty to start tag
                         let start = BytesStart::new(&name);
                         writer.write_event(Event::Start(start))?;
@@ -558,6 +485,15 @@ impl XmlModifier {
         fs::write(&tmp_path, content)?;
         fs::rename(&tmp_path, path)?;
         Ok(())
+    }
+}
+
+/// Check if the current element path matches a pattern
+fn path_matches(current_path: &str, name: &str, pattern: &str) -> bool {
+    if pattern.contains('/') {
+        current_path.ends_with(pattern) || current_path == pattern
+    } else {
+        current_path.ends_with(pattern) || current_path == pattern || name == pattern
     }
 }
 

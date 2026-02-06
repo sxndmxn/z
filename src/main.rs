@@ -1,15 +1,15 @@
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::uninlined_format_args)]
 
 mod context;
 mod csv_reader;
-mod db;
-mod error;
 mod llm;
 mod ml;
+mod structs;
 mod xml;
 
 use clap::{Parser, Subcommand};
-use error::{Result, ZError};
+use structs::{CsvData, FeatureMatrix, Result, ZError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -42,6 +42,18 @@ enum Commands {
         /// Treat input as TSV instead of CSV
         #[arg(long)]
         tsv: bool,
+
+        /// DBSCAN epsilon (0.0 = auto-estimate via k-distance heuristic)
+        #[arg(long, default_value = "0.0")]
+        dbscan_eps: f64,
+
+        /// DBSCAN minimum points per cluster
+        #[arg(long, default_value = "5")]
+        dbscan_min_points: usize,
+
+        /// Number of PCA components (0 = auto)
+        #[arg(long, default_value = "0")]
+        pca_components: usize,
     },
 
     /// Use LLM to modify XML based on context files
@@ -96,7 +108,20 @@ fn run() -> Result<()> {
             output_dir,
             clusters,
             tsv,
-        }) => run_analyze(&csv, &output_dir, clusters, tsv),
+            dbscan_eps,
+            dbscan_min_points,
+            pca_components,
+        }) => run_analyze(
+            &csv,
+            &output_dir,
+            &ml::pipeline::AnalysisConfig {
+                clusters,
+                dbscan_eps,
+                dbscan_min_points,
+                pca_components,
+            },
+            tsv,
+        ),
 
         Some(Commands::Modify {
             context_dir,
@@ -127,10 +152,12 @@ fn run() -> Result<()> {
 }
 
 /// Run the ML analysis phase
-#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
-fn run_analyze(csv_path: &Path, output_dir: &Path, clusters: usize, tsv: bool) -> Result<()> {
-    use std::fmt::Write as _;
-
+fn run_analyze(
+    csv_path: &Path,
+    output_dir: &Path,
+    config: &ml::pipeline::AnalysisConfig,
+    tsv: bool,
+) -> Result<()> {
     // Validate input
     if !csv_path.exists() {
         return Err(ZError::Config(format!(
@@ -145,128 +172,54 @@ fn run_analyze(csv_path: &Path, output_dir: &Path, clusters: usize, tsv: bool) -
     eprintln!("Analyzing: {}", csv_path.display());
 
     // Parse CSV
-    let csv_data = csv_reader::CsvData::from_file(csv_path, tsv)?;
+    let csv_data = CsvData::from_file(csv_path, tsv)?;
     eprintln!(
         "Loaded {} rows x {} columns",
         csv_data.row_count(),
         csv_data.col_count()
     );
 
-    // Extract features
+    // Extract and normalize features
     eprintln!("Extracting features...");
-    let features = ml::features::FeatureMatrix::from_csv(&csv_data)?;
+    let features = FeatureMatrix::from_csv(&csv_data)?;
     let normalized = features.normalize();
 
-    // Compute statistics
-    eprintln!("Computing statistics...");
-    let mut column_stats = Vec::new();
-    for (i, name) in features.names.iter().enumerate() {
-        if let Some(col) = features.column(i) {
-            if let Ok(stats) = ml::stats::ColumnStats::calculate(name, &col) {
-                column_stats.push((stats, col));
-            }
-        }
-    }
-
-    // Clustering
-    let k = if clusters == 0 {
-        ml::clustering::suggest_k(&normalized, 10)
-    } else {
-        clusters
-    };
-    eprintln!("Running K-means with k={k}...");
-    let cluster_result = ml::clustering::kmeans(&normalized, k)?;
-
-    // Detect anomalies
-    eprintln!("Detecting anomalies...");
-    let mut anomalies = Vec::new();
-    for (stats, col) in &column_stats {
-        let outlier_indices = stats.outlier_indices(col);
-        for idx in outlier_indices {
-            let value = col.get(idx).copied().unwrap_or(0.0);
-            let z_score = if stats.std_dev > 0.0 {
-                (value - stats.mean) / stats.std_dev
-            } else {
-                0.0
-            };
-            anomalies.push(ml::output::Anomaly {
-                row_id: idx,
-                anomaly_type: format!("{}_outlier", stats.name),
-                score: z_score.abs() / 4.0, // Normalize to ~0-1 range
-                details: format!(
-                    "{}={:.2} is {:.1} std from mean",
-                    stats.name, value, z_score
-                ),
-            });
-        }
-    }
-
-    // Sort anomalies by score (highest first) and dedupe by row_id
-    anomalies.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let mut seen_rows = std::collections::HashSet::new();
-    anomalies.retain(|a| seen_rows.insert(a.row_id));
+    // Run pipeline
+    eprintln!("Running analysis pipeline...");
+    let result = ml::pipeline::run_pipeline(&features, &normalized, config)?;
 
     // Write output files
     eprintln!("Writing output files...");
 
-    // Build summary
-    let mut summary = String::new();
-    let _ = writeln!(
-        summary,
-        "ML Analysis Summary for {}",
-        csv_path
-            .file_name()
-            .map_or("input", |n| n.to_str().unwrap_or("input"))
-    );
-    let _ = writeln!(summary, "================================");
-    let _ = writeln!(
-        summary,
-        "Rows: {}\nColumns: {} ({} numeric)",
-        csv_data.row_count(),
-        csv_data.col_count(),
-        features.names.len()
-    );
-    let _ = writeln!(summary);
-    let _ = writeln!(summary, "Key Statistics:");
-    for (stats, _) in &column_stats {
-        let _ = writeln!(summary, "- {}", stats.summary());
-    }
-    let _ = writeln!(summary);
-    let _ = writeln!(summary, "Clustering (k={}):", cluster_result.k);
-    for (i, size) in cluster_result.sizes.iter().enumerate() {
-        let pct = (*size as f64 / csv_data.row_count() as f64) * 100.0;
-        let _ = writeln!(summary, "- Cluster {i} ({pct:.0}%): {size} samples");
-    }
-    let _ = writeln!(summary);
-    let _ = writeln!(summary, "Anomalies Detected: {} rows", anomalies.len());
-
+    let summary = ml::output::build_summary(csv_path, &csv_data, &result);
     ml::output::write_summary(output_dir, &summary)?;
+    ml::output::write_clusters(output_dir, &result.cluster_result, &normalized)?;
+    ml::output::write_anomalies(output_dir, &result.anomalies)?;
 
-    // Write clusters.csv
-    ml::output::write_clusters(output_dir, &cluster_result, &normalized)?;
-
-    // Write anomalies.csv
-    ml::output::write_anomalies(output_dir, &anomalies)?;
-
-    // Write stats.json
-    let stats_only: Vec<_> = column_stats.iter().map(|(s, _)| s).collect();
+    let stats_refs: Vec<_> = result.column_stats.iter().collect();
     ml::output::write_stats_json(
         output_dir,
         &csv_data,
-        &stats_only,
-        &cluster_result,
-        &anomalies,
+        &stats_refs,
+        &result.cluster_result,
+        &result.anomalies,
+        result.dbscan_result.as_ref(),
+        result.correlation.as_ref(),
+        result.pca.as_ref(),
     )?;
+
+    if let Some(corr) = &result.correlation {
+        ml::output::write_correlation(output_dir, corr)?;
+    }
 
     eprintln!("Output written to {}", output_dir.display());
     eprintln!("  - summary.txt");
     eprintln!("  - clusters.csv");
     eprintln!("  - anomalies.csv");
     eprintln!("  - stats.json");
+    if result.correlation.is_some() {
+        eprintln!("  - correlation.csv");
+    }
 
     Ok(())
 }

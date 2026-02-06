@@ -1,44 +1,9 @@
-use crate::error::{Result, ZError};
-use crate::ml::features::NormalizedFeatures;
-use linfa::traits::{Fit, Predict};
+use crate::structs::{ClusterResult, DbscanResult, NormalizedFeatures, Result, ZError};
+use linfa::traits::{Fit, Predict, Transformer};
+use linfa::ParamGuard;
 use linfa::DatasetBase;
-use linfa_clustering::KMeans;
+use linfa_clustering::{Dbscan, KMeans};
 use ndarray::Array2;
-use std::fmt::Write as _;
-
-/// Result of K-means clustering
-#[derive(Debug, Clone)]
-pub struct ClusterResult {
-    /// Cluster assignment for each sample
-    #[allow(dead_code)]
-    pub labels: Vec<usize>,
-    /// Number of clusters
-    pub k: usize,
-    /// Cluster sizes
-    pub sizes: Vec<usize>,
-    /// Original row indices for each cluster
-    pub cluster_members: Vec<Vec<usize>>,
-}
-
-impl ClusterResult {
-    /// Get summary for LLM context
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn summary(&self) -> String {
-        let mut s = format!("K-means clustering with k={}\n", self.k);
-        for (i, size) in self.sizes.iter().enumerate() {
-            let _ = writeln!(s, "  Cluster {i}: {size} samples");
-        }
-        s
-    }
-
-    /// Get row indices for a specific cluster
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn get_cluster(&self, cluster_id: usize) -> Option<&Vec<usize>> {
-        self.cluster_members.get(cluster_id)
-    }
-}
 
 /// Perform K-means clustering on normalized features
 ///
@@ -75,29 +40,28 @@ pub fn kmeans(features: &NormalizedFeatures, k: usize) -> Result<ClusterResult> 
     let predictions = model.predict(&dataset);
     let labels: Vec<usize> = predictions.iter().copied().collect();
 
-    // Calculate cluster sizes and members
+    // Calculate cluster sizes
     let mut sizes: Vec<usize> = vec![0usize; k];
-    let mut cluster_members: Vec<Vec<usize>> = vec![Vec::new(); k];
 
-    for (sample_idx, &cluster_id) in labels.iter().enumerate() {
+    for &cluster_id in &labels {
         sizes[cluster_id] += 1;
-        // Map back to original row index
-        let original_row = features.row_indices[sample_idx];
-        cluster_members[cluster_id].push(original_row);
     }
 
     Ok(ClusterResult {
         labels,
         k,
         sizes,
-        cluster_members,
     })
 }
 
 /// Find optimal k using elbow method (simplified)
 /// Returns suggested k value based on diminishing returns
 #[must_use]
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 pub fn suggest_k(features: &NormalizedFeatures, max_k: usize) -> usize {
     let n = features.n_samples();
     let max_k = max_k.min(n).max(1);
@@ -107,11 +71,129 @@ pub fn suggest_k(features: &NormalizedFeatures, max_k: usize) -> usize {
     suggested.clamp(2, max_k)
 }
 
+/// Estimate a good epsilon for DBSCAN using k-distance heuristic
+///
+/// Computes the k-th nearest neighbor distance for each point,
+/// sorts them, and picks the "knee" (point of max curvature).
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn estimate_epsilon(features: &NormalizedFeatures, min_points: usize) -> f64 {
+    let n = features.n_samples();
+    if n < min_points + 1 {
+        return 0.5;
+    }
+
+    // Compute k-th nearest neighbor distance for each point
+    let mut k_distances: Vec<f64> = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let mut distances: Vec<f64> = (0..n)
+            .filter(|&j| j != i)
+            .map(|j| {
+                features.data[i]
+                    .iter()
+                    .zip(features.data[j].iter())
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f64>()
+                    .sqrt()
+            })
+            .collect();
+        distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        // k-th nearest neighbor (0-indexed, so min_points - 1)
+        let k_idx = (min_points - 1).min(distances.len() - 1);
+        k_distances.push(distances[k_idx]);
+    }
+
+    // Sort k-distances
+    k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Find the "knee" - point of maximum second derivative
+    if k_distances.len() < 3 {
+        return k_distances.last().copied().unwrap_or(0.5);
+    }
+
+    let mut max_diff = 0.0f64;
+    let mut knee_idx = k_distances.len() * 9 / 10; // default to 90th percentile
+
+    for i in 1..k_distances.len() - 1 {
+        let second_deriv = (k_distances[i + 1] - k_distances[i])
+            - (k_distances[i] - k_distances[i - 1]);
+        if second_deriv > max_diff {
+            max_diff = second_deriv;
+            knee_idx = i;
+        }
+    }
+
+    k_distances[knee_idx]
+}
+
+/// Run DBSCAN clustering on normalized features
+///
+/// # Errors
+/// Returns error if clustering fails
+pub fn dbscan(
+    features: &NormalizedFeatures,
+    epsilon: f64,
+    min_points: usize,
+) -> Result<DbscanResult> {
+    let n_samples = features.n_samples();
+    let n_features = features.n_features();
+
+    if n_samples < min_points {
+        return Err(ZError::Ml(format!(
+            "Need at least {min_points} samples for DBSCAN, got {n_samples}"
+        )));
+    }
+
+    let flat_data = features.to_flat();
+    let array = Array2::from_shape_vec((n_samples, n_features), flat_data)
+        .map_err(|e| ZError::Ml(format!("Failed to create array for DBSCAN: {e}")))?;
+
+    let params = Dbscan::params(min_points)
+        .tolerance(epsilon)
+        .check()
+        .map_err(|e| ZError::Ml(format!("DBSCAN params invalid: {e}")))?;
+
+    let clusters = params.transform(&array);
+
+    let labels: Vec<Option<usize>> = clusters.iter().copied().collect();
+
+    // Count clusters and noise
+    let mut n_clusters = 0usize;
+    let mut n_noise = 0usize;
+    let mut cluster_sizes = std::collections::HashMap::new();
+
+    for label in &labels {
+        match label {
+            Some(c) => {
+                *cluster_sizes.entry(*c).or_insert(0usize) += 1;
+                if *c >= n_clusters {
+                    n_clusters = *c + 1;
+                }
+            }
+            None => n_noise += 1,
+        }
+    }
+
+    let sizes: Vec<usize> = (0..n_clusters)
+        .map(|c| cluster_sizes.get(&c).copied().unwrap_or(0))
+        .collect();
+
+    Ok(DbscanResult {
+        labels,
+        n_clusters,
+        n_noise,
+        sizes,
+        epsilon,
+        min_points,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::csv_reader::CsvData;
-    use crate::ml::features::FeatureMatrix;
+    use crate::structs::{CsvData, FeatureMatrix};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -153,5 +235,30 @@ mod tests {
 
         let k = suggest_k(&normalized, 10);
         assert!(k >= 2 && k <= 10);
+    }
+
+    #[test]
+    fn test_dbscan() {
+        let csv = create_clusterable_csv();
+        let features = FeatureMatrix::from_csv(&csv).expect("extract features");
+        let normalized = features.normalize();
+
+        let eps = estimate_epsilon(&normalized, 3);
+        assert!(eps > 0.0);
+
+        let result = dbscan(&normalized, eps, 3).expect("dbscan");
+        assert_eq!(result.labels.len(), 8);
+        assert!(result.n_clusters > 0);
+    }
+
+    #[test]
+    fn test_estimate_epsilon() {
+        let csv = create_clusterable_csv();
+        let features = FeatureMatrix::from_csv(&csv).expect("extract features");
+        let normalized = features.normalize();
+
+        let eps = estimate_epsilon(&normalized, 3);
+        assert!(eps > 0.0);
+        assert!(eps < 10.0);
     }
 }
